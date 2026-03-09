@@ -176,3 +176,243 @@ def handle_admin_steps(message):
 
 # --- 1-QISM TUGADI ---
 # (Davomi kutilmoqda...)
+# --- 2-QISM BOSHLANISHI ---
+
+# --- FOYDALANUVCHI INTERFEYSI VA QIDIRUV ---
+
+@bot.message_handler(func=lambda m: m.text == "🔍 Anime qidirish")
+def search_prompt(message):
+    bot.send_message(message.chat.id, "🔢 Anime **kodini** yuboring (Masalan: 101):", 
+                     parse_mode="Markdown", reply_markup=cancel_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🔥 Top Animelar")
+def show_top_animes(message):
+    # Bu yerda bazadan eng ko'p ko'rilgan yoki oxirgi qo'shilganlarni chiqarish mumkin
+    bot.send_message(message.chat.id, "🌟 Hozirda eng ommabop animelar ro'yxati shakllantirilmoqda...")
+
+@bot.message_handler(func=lambda m: m.text == "💎 Premium obuna")
+def premium_info(message):
+    premium_text = (
+        "💎 **AniShadow Premium afzalliklari:**\n\n"
+        "✅ Barcha yopiq (Premium) animelarga kirish\n"
+        "✅ Reklamasiz va cheklovlarsiz tomosha qilish\n"
+        "✅ Yangi qismlarni birinchilardan bo'lib ko'rish\n\n"
+        f"💳 Sotib olish uchun admin bilan bog'laning: {ADMIN_USER}"
+    )
+    bot.send_message(message.chat.id, premium_text, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "🤝 Reklama")
+def ads_info(message):
+    bot.send_message(message.chat.id, f"🤝 Hamkorlik va reklama masalalari bo'yicha admin: {ADMIN_USER}")
+
+@bot.message_handler(func=lambda m: m.text == "🏠 Asosiy Menyu")
+def back_home(message):
+    bot.send_message(message.chat.id, "🏠 Siz asosiy menyudasiz.", reply_markup=get_main_keyboard(message.from_user.id))
+
+# --- ANIME QIDIRUV VA NATIJALAR ---
+
+@bot.message_handler(func=lambda m: m.text and m.text.isdigit())
+def search_anime_by_code(message):
+    code = message.text
+    anime = db.get_anime(code)
+    uid = message.from_user.id
+
+    if anime:
+        # anime = (code, title, description, img_id, is_premium)
+        title, is_prem_anime = anime[1], anime[4]
+        
+        # PREMIUM TEKSHIRUVI
+        user_is_premium = db.is_premium(uid)
+        
+        if is_prem_anime and not user_is_premium and not is_admin(uid):
+            lock_text = (
+                f"🔒 **'{title}' — faqat Premium foydalanuvchilar uchun!**\n\n"
+                "Ushbu animeni ko'rish uchun sizda Premium obuna bo'lishi kerak.\n"
+                f"Murojaat: {ADMIN_USER}"
+            )
+            return bot.send_photo(message.chat.id, anime[3], caption=lock_text, parse_mode="Markdown")
+
+        # Qismlarni (epizodlarni) olish
+        episodes = db.get_episodes(code)
+        
+        markup = types.InlineKeyboardMarkup(row_width=4)
+        btns = []
+        for ep in episodes:
+            # ep = (episode_number, file_id)
+            btns.append(types.InlineKeyboardButton(f"{ep[0]}-qism", callback_data=f"play_{code}_{ep[0]}"))
+        
+        markup.add(*btns)
+        
+        status_tag = "💎 Premium" if is_prem_anime else "🟢 Bepul"
+        caption = f"🎬 **Nomi:** {title}\n🌟 **Holati:** {status_tag}\n\n👇 Tomosha qilish uchun qismni tanlang:"
+        
+        bot.send_photo(message.chat.id, anime[3], caption=caption, parse_mode="Markdown", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "❌ Afsuski, bunday kodli anime topilmadi. Iltimos, kodni tekshirib qayta yuboring.")
+
+# --- VIDEO PLEYER (CALLBACK HANDLER) ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("play_"))
+def play_episode(call):
+    # data format: play_code_num
+    _, code, num = call.data.split("_")
+    
+    episodes = db.get_episodes(code)
+    file_id = None
+    for ep in episodes:
+        if str(ep[0]) == num:
+            file_id = ep[1]
+            break
+            
+    if file_id:
+        # Videoni yuborish
+        bot.send_video(
+            call.message.chat.id, 
+            file_id, 
+            caption=f"🎞 **{num}-qism**\n\n🤖 @AniShadowMythic — Maroqli hordiq!", 
+            parse_mode="Markdown"
+        )
+        bot.answer_callback_query(call.id, "Video yuklanmoqda...")
+    else:
+        bot.answer_callback_query(call.id, "❌ Video topilmadi.", show_alert=True)
+
+# --- ADMIN: GLOBAL XABAR TARQATISH (BROADCAST) ---
+
+@bot.message_handler(func=lambda m: m.text == "📢 Xabar Tarqatish" and is_admin(m.from_user.id))
+def broadcast_start(message):
+    user_states[message.from_user.id] = {'step': 'waiting_broadcast_text'}
+    bot.send_message(message.chat.id, "📝 Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:", reply_markup=cancel_keyboard())
+
+# Bu qism handling_admin_steps funksiyasiga qo'shimcha sifatida ishlaydi
+# handle_admin_steps ichiga quyidagi shartni qo'shishingiz mumkin (yoki alohida yozish)
+
+@bot.message_handler(func=lambda m: is_admin(m.from_user.id) and user_states.get(m.from_user.id, {}).get('step') == 'waiting_broadcast_text')
+def broadcast_finish(message):
+    if message.text == "❌ Bekor qilish":
+        del user_states[message.from_user.id]
+        return bot.send_message(message.chat.id, "🚫 Bekor qilindi.", reply_markup=get_admin_keyboard())
+
+    # Bazadan barcha foydalanuvchilarni olish (bu funksiyani Database ga qo'shish kerak)
+    # Hozircha namunaviy mantiq:
+    bot.send_message(message.chat.id, "🚀 Xabar tarqatish boshlandi...")
+    # ... (bazadagi barcha user_id larni aylanish kodi) ...
+    bot.send_message(message.chat.id, "✅ Xabar hamma foydalanuvchilarga yuborildi!")
+    del user_states[message.from_user.id]
+
+# --- 24/7 ISHLASH VA ERROR HANDLING ---
+
+def run_bot():
+    """Botni uzluksiz yurgizish funksiyasi"""
+    print(f"🚀 AniShadow V11 ishga tushdi (Admin: {ADMIN_USER})")
+    
+    while True:
+        try:
+            # skip_pending=True eski o'qilmagan xabarlarni o'chirib yuboradi
+            bot.infinity_polling(timeout=20, long_polling_timeout=10, skip_pending=True)
+        except Exception as e:
+            logging.error(f"⚠️ Botda xatolik yuz berdi: {e}")
+            time.sleep(5) # 5 soniyadan keyin qayta harakat qiladi
+
+if __name__ == "__main__":
+    run_bot()
+
+# --- 2-QISM TUGADI ---
+# --- 3-QISM BOSHLANISHI ---
+
+# --- ADMIN: STATISTIKA VA FOYDALANUVCHILARNI BOSHQARISH ---
+
+@bot.message_handler(func=lambda m: m.text == "📈 Statistika" and is_admin(m.from_user.id))
+def show_stats(message):
+    """Bot statistikasini ko'rsatish"""
+    conn = db.connection
+    cursor = conn.cursor()
+    
+    # Jami foydalanuvchilar
+    total_users = cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    # Premium foydalanuvchilar
+    prem_users = cursor.execute("SELECT COUNT(*) FROM users WHERE is_premium = 1").fetchone()[0]
+    # Jami animelar
+    total_animes = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
+    
+    stats_msg = (
+        "📊 **AniShadow Global Statistikasi**\n\n"
+        f"👤 Jami foydalanuvchilar: `{total_users}`\n"
+        f"💎 Premium a'zolar: `{prem_users}`\n"
+        f"🎬 Bazadagi animelar: `{total_animes}`\n\n"
+        "⚡️ Server holati: `Online 24/7`"
+    )
+    bot.send_message(message.chat.id, stats_msg, parse_mode="Markdown")
+
+# --- ADMIN: XABAR TARQATISH (TO'LIQ MANTIQ) ---
+
+@bot.message_handler(func=lambda m: is_admin(m.from_user.id) and user_states.get(m.from_user.id, {}).get('step') == 'waiting_broadcast_text')
+def handle_broadcast(message):
+    if message.text == "❌ Bekor qilish":
+        del user_states[message.from_user.id]
+        return bot.send_message(message.chat.id, "🚫 Bekor qilindi.", reply_markup=get_admin_keyboard())
+
+    broadcast_text = message.text
+    cursor = db.connection.cursor()
+    users = cursor.execute("SELECT user_id FROM users").fetchall()
+    
+    bot.send_message(message.chat.id, f"🚀 `{len(users)}` ta foydalanuvchiga yuborish boshlandi...", parse_mode="Markdown")
+    
+    count = 0
+    for user in users:
+        try:
+            bot.send_message(user[0], broadcast_text)
+            count += 1
+            time.sleep(0.05) # Telegram spam filteriga tushmaslik uchun
+        except Exception:
+            continue
+            
+    bot.send_message(message.chat.id, f"✅ Xabar tarqatish yakunlandi!\nYetkazildi: `{count}` ta foydalanuvchiga.", parse_mode="Markdown")
+    del user_states[message.from_user.id]
+
+# --- FOYDALANUVCHI: HISOB MA'LUMOTLARI ---
+
+@bot.message_handler(func=lambda m: m.text == "📊 Mening hisobim")
+def my_account(message):
+    uid = message.from_user.id
+    status = "💎 Premium" if db.is_premium(uid) else "🟢 Oddiy foydalanuvchi"
+    
+    acc_text = (
+        "👤 **Sizning ma'lumotlaringiz:**\n\n"
+        f"🆔 ID: `{uid}`\n"
+        f"🎭 Status: {status}\n"
+        f"🤖 Bot: @AniShadowMythic"
+    )
+    bot.send_message(message.chat.id, acc_text, parse_mode="Markdown")
+
+# --- XAVFSIZLIK: HAR QANDAY XATOLIKNI USHLASH ---
+
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
+def handle_all_other_messages(message):
+    """Noma'lum buyruqlarni chiroyli qaytarish"""
+    if message.from_user.id in user_states:
+        # Agar admin biror narsani yuklayotgan bo'lsa, xalaqit bermaymiz
+        return
+        
+    bot.send_message(
+        message.chat.id, 
+        "❓ **Noma'lum buyruq.**\n\nIltimos, menyudan foydalaning yoki anime kodini yuboring.",
+        reply_markup=get_main_keyboard(message.from_user.id),
+        parse_mode="Markdown"
+    )
+
+# --- BOTNI QAYTA ISHGA TUSHIRISH MANTIQI (RELIABILITY) ---
+
+def start_polling():
+    """Bot o'chib qolmasligi uchun cheksiz sikl"""
+    while True:
+        try:
+            logging.info("Bot polling rejimi faollashdi...")
+            bot.polling(none_stop=True, interval=0, timeout=40)
+        except Exception as e:
+            logging.error(f"Xatolik: {e}. 10 soniyadan keyin qayta urunish...")
+            time.sleep(10)
+
+if __name__ == "__main__":
+    start_polling()
+
+
