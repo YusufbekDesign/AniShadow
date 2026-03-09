@@ -1,3 +1,2 @@
 pyTelegramBotAPI
-sqlite3
-requests
+
