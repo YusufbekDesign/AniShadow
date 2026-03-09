@@ -10,7 +10,7 @@ from database import Database
 load_dotenv()
 
 # --- KONFIGURATSIYA ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("8463516034:AAF0S0e8_6M8XhlmqFTpmrbOcIddOxh19i0")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7878240647")) #
 ADMIN_USER = "@Shadow_Mythic" #
 
