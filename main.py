@@ -713,8 +713,24 @@ def handle_join_request(chat_join_request):
     conn.commit()
     print(f"📩 ZAYAVKA: {u_id} kanalga so'rov yubordi va bazaga yozildi.")
 
-# --- ENG OXIRGI QATORLAR ---
+# ==================== FLASK SERVER ====================
+from flask import Flask
+from threading import Thread
+
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def home():
+    return "Bot ishlamoqda!"
+
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=8080)
+
+# ==================== BOTNI ISHGA TUSHIRISH ====================
 if __name__ == "__main__":
+    # Flask serverini alohida thread'da ishga tushirish
+    Thread(target=run_flask).start()
+    
     print("🚀 Bot muvaffaqiyatli ishga tushdi...")
     try:
         bot.infinity_polling(allowed_updates=["message", "callback_query", "chat_join_request"])
