@@ -271,22 +271,7 @@ def manage_admins(message):
     markup.add(types.InlineKeyboardButton("📋 Adminlar ro'yxati", callback_data="list_admins"))
     bot.send_message(message.chat.id, "👥 Admin boshqaruvi:", reply_markup=markup)
 
-# -------------------- Admin qo'shish (bosqichma-bosqich) --------------------
-# Ruxsatlar ro'yxati va ularning bazadagi ustun nomlari
-ADMIN_PERMS = [
-    ("➕ Anime yuklash", "add_anime"),
-    ("🎬 Qism qo'shish", "add_episode"),
-    ("🗑 Anime o'chirish", "delete_anime"),
-    ("🗑 Qism o'chirish", "delete_episode"),
-    ("💎 Premium", "premium"),
-    ("📢 Reklama", "broadcast"),
-    ("📊 Statistika", "view_stats"),
-    ("📩 Foydalanuvchiga yozish", "write_user")
-]
-
-# Vaqtinchalik ma'lumotlar: admin qo'shish va tahrirlash uchun
-temp_data = {}  # {super_admin_id: {"mode": "add" yoki "edit", "step": 0, "perms": {}, "target_id": None, "message_id": None}}
-
+# -------------------- Admin qo'shish (toggle bilan) --------------------
 @bot.callback_query_handler(func=lambda call: call.data == "add_admin" and call.from_user.id == ADMIN_ID)
 def add_admin_start(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -298,67 +283,84 @@ def add_admin_get_id(message):
         target_id = int(message.text)
     except:
         return bot.send_message(message.chat.id, "❌ Noto‘g‘ri ID. Bekor qilindi.", reply_markup=admin_kb(ADMIN_ID))
-    # Vaqtinchalik ma'lumotni saqlash
-    temp_data[message.from_user.id] = {
-        "mode": "add",
-        "step": 0,
-        "perms": {k: 0 for _, k in ADMIN_PERMS},
-        "target_id": target_id,
-        "message_id": None
+    # Vaqtinchalik ma'lumotlarni saqlash
+    add_temp[target_id] = {
+        'add_anime': 0,
+        'add_episode': 0,
+        'delete_anime': 0,
+        'delete_episode': 0,
+        'premium': 0,
+        'broadcast': 0,
+        'view_stats': 0,
+        'write_user': 0
     }
-    ask_next_permission(message, message.from_user.id)
+    show_add_perms(message.chat.id, target_id)
 
-def ask_next_permission(message, super_admin_id):
-    data = temp_data.get(super_admin_id)
-    if not data:
-        return
-    step = data["step"]
-    if step >= len(ADMIN_PERMS):
-        # Barcha ruxsatlar to'plandi, bazaga yozish
-        target_id = data["target_id"]
-        perms = data["perms"]
-        conn, cursor = get_db()
-        cursor.execute('''INSERT OR REPLACE INTO admins (user_id, can_add_anime, can_add_episode,
-                         can_delete_anime, can_delete_episode, can_premium, can_broadcast,
-                         can_view_stats, can_write_user)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                       (target_id,
-                        perms["add_anime"], perms["add_episode"],
-                        perms["delete_anime"], perms["delete_episode"], perms["premium"],
-                        perms["broadcast"], perms["view_stats"], perms["write_user"]))
-        conn.commit()
-        bot.send_message(message.chat.id, f"✅ Admin (ID: {target_id}) muvaffaqiyatli qo‘shildi!", reply_markup=admin_kb(ADMIN_ID))
-        del temp_data[super_admin_id]
-        return
-
-    perm_title, perm_key = ADMIN_PERMS[step]
+def show_add_perms(chat_id, target_id):
+    perms = add_temp[target_id]
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("✅ Ha", callback_data=f"perm_yes_{step}_{perm_key}"),
-        types.InlineKeyboardButton("❌ Yo'q", callback_data=f"perm_no_{step}_{perm_key}")
+        types.InlineKeyboardButton(f"{'✅' if perms['add_anime'] else '❌'} Anime yuklash", callback_data=f"add_toggle_add_anime_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['add_episode'] else '❌'} Qism qo'shish", callback_data=f"add_toggle_add_episode_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['delete_anime'] else '❌'} Anime o'chirish", callback_data=f"add_toggle_delete_anime_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['delete_episode'] else '❌'} Qism o'chirish", callback_data=f"add_toggle_delete_episode_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['premium'] else '❌'} Premium", callback_data=f"add_toggle_premium_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['broadcast'] else '❌'} Reklama", callback_data=f"add_toggle_broadcast_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['view_stats'] else '❌'} Statistika", callback_data=f"add_toggle_view_stats_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['write_user'] else '❌'} Foydalanuvchiga yozish", callback_data=f"add_toggle_write_user_{target_id}"),
+        types.InlineKeyboardButton("💾 Saqlash", callback_data=f"add_save_{target_id}"),
+        types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="add_cancel")
     )
-    markup.add(types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="perm_cancel"))
-    bot.send_message(message.chat.id, f"📌 {perm_title} ruxsatini berasizmi?", reply_markup=markup)
+    bot.send_message(chat_id, f"👤 ID: {target_id} uchun ruxsatlarni belgilang:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('perm_') and call.from_user.id == ADMIN_ID)
-def perm_answer_callback(call):
-    data = temp_data.get(call.from_user.id)
-    if not data:
-        return bot.answer_callback_query(call.id, "Jarayon tugagan yoki xato.")
-    parts = call.data.split('_')
-    if parts[1] == "cancel":
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(call.message.chat.id, "Bekor qilindi.", reply_markup=admin_kb(ADMIN_ID))
-        del temp_data[call.from_user.id]
-        bot.answer_callback_query(call.id)
-        return
-    answer = parts[1]  # "yes" yoki "no"
-    step = int(parts[2])
-    perm_key = parts[3]
-    data["perms"][perm_key] = 1 if answer == "yes" else 0
-    data["step"] = step + 1
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_toggle_') and call.from_user.id == ADMIN_ID)
+def add_toggle_callback(call):
+    _, _, perm_key, target_id_str = call.data.split('_')
+    target_id = int(target_id_str)
+    if target_id in add_temp:
+        add_temp[target_id][perm_key] = 1 - add_temp[target_id][perm_key]
+        bot.answer_callback_query(call.id, f"{perm_key}: {'✅' if add_temp[target_id][perm_key] else '❌'}", show_alert=False)
+        # Tugma matnini yangilash
+        perms = add_temp[target_id]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton(f"{'✅' if perms['add_anime'] else '❌'} Anime yuklash", callback_data=f"add_toggle_add_anime_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['add_episode'] else '❌'} Qism qo'shish", callback_data=f"add_toggle_add_episode_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['delete_anime'] else '❌'} Anime o'chirish", callback_data=f"add_toggle_delete_anime_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['delete_episode'] else '❌'} Qism o'chirish", callback_data=f"add_toggle_delete_episode_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['premium'] else '❌'} Premium", callback_data=f"add_toggle_premium_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['broadcast'] else '❌'} Reklama", callback_data=f"add_toggle_broadcast_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['view_stats'] else '❌'} Statistika", callback_data=f"add_toggle_view_stats_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['write_user'] else '❌'} Foydalanuvchiga yozish", callback_data=f"add_toggle_write_user_{target_id}"),
+            types.InlineKeyboardButton("💾 Saqlash", callback_data=f"add_save_{target_id}"),
+            types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="add_cancel")
+        )
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+    else:
+        bot.answer_callback_query(call.id, "Xatolik")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('add_save_') and call.from_user.id == ADMIN_ID)
+def add_save_callback(call):
+    target_id = int(call.data.split('_')[2])
+    if target_id not in add_temp:
+        return bot.answer_callback_query(call.id, "Xatolik")
+    perms = add_temp.pop(target_id)
+    conn, cursor = get_db()
+    cursor.execute('''INSERT OR REPLACE INTO admins (user_id, can_add_anime, can_add_episode,
+                     can_delete_anime, can_delete_episode, can_premium, can_broadcast,
+                     can_view_stats, can_write_user)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (target_id, perms['add_anime'], perms['add_episode'],
+                    perms['delete_anime'], perms['delete_episode'], perms['premium'],
+                    perms['broadcast'], perms['view_stats'], perms['write_user']))
+    conn.commit()
+    bot.edit_message_text(f"✅ Admin (ID: {target_id}) muvaffaqiyatli qo‘shildi!", call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_cancel" and call.from_user.id == ADMIN_ID)
+def add_cancel_callback(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
-    ask_next_permission(call.message, call.from_user.id)
+    bot.send_message(call.message.chat.id, "Bekor qilindi.", reply_markup=admin_kb(ADMIN_ID))
     bot.answer_callback_query(call.id)
 
 # -------------------- Adminlar ro'yxati va tahrirlash --------------------
@@ -396,7 +398,6 @@ def send_admin_list_page(chat_id, offset, message_id=None):
                 types.InlineKeyboardButton(f"✏️ Tahrirlash", callback_data=f"edit_admin_{uid}"),
                 types.InlineKeyboardButton(f"🗑 O‘chirish", callback_data=f"del_admin_{uid}")
             )
-        # Sahifalash tugmalari
         nav_btns = []
         if offset > 0:
             nav_btns.append(types.InlineKeyboardButton("⬅️ Orqaga", callback_data=f"admin_page_{offset-5}"))
@@ -423,8 +424,10 @@ def delete_admin(call):
     cursor.execute("DELETE FROM admins WHERE user_id = ?", (target_id,))
     conn.commit()
     bot.answer_callback_query(call.id, f"Admin (ID: {target_id}) o‘chirildi!")
-    # Ro‘yxatni yangilash
     send_admin_list_page(call.message.chat.id, 0, call.message.message_id)
+
+# Tahrirlash uchun vaqtinchalik ma'lumotlar
+edit_temp = {}
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('edit_admin_') and call.from_user.id == ADMIN_ID)
 def edit_admin_start(call):
@@ -436,24 +439,89 @@ def edit_admin_start(call):
                             FROM admins WHERE user_id = ?''', (target_id,)).fetchone()
     if not row:
         return bot.answer_callback_query(call.id, "Admin topilmadi!", show_alert=True)
-    perms = {
-        "add_anime": row[0],
-        "add_episode": row[1],
-        "delete_anime": row[2],
-        "delete_episode": row[3],
-        "premium": row[4],
-        "broadcast": row[5],
-        "view_stats": row[6],
-        "write_user": row[7]
+    edit_temp[target_id] = {
+        'add_anime': row[0],
+        'add_episode': row[1],
+        'delete_anime': row[2],
+        'delete_episode': row[3],
+        'premium': row[4],
+        'broadcast': row[5],
+        'view_stats': row[6],
+        'write_user': row[7]
     }
-    temp_data[call.from_user.id] = {
-        "mode": "edit",
-        "step": 0,
-        "perms": perms,
-        "target_id": target_id,
-        "message_id": call.message.message_id
-    }
-    ask_next_permission(call.message, call.from_user.id)
+    show_edit_perms(call.message.chat.id, target_id, call.message.message_id)
+
+def show_edit_perms(chat_id, target_id, message_id):
+    perms = edit_temp[target_id]
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton(f"{'✅' if perms['add_anime'] else '❌'} Anime yuklash", callback_data=f"edit_toggle_add_anime_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['add_episode'] else '❌'} Qism qo'shish", callback_data=f"edit_toggle_add_episode_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['delete_anime'] else '❌'} Anime o'chirish", callback_data=f"edit_toggle_delete_anime_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['delete_episode'] else '❌'} Qism o'chirish", callback_data=f"edit_toggle_delete_episode_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['premium'] else '❌'} Premium", callback_data=f"edit_toggle_premium_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['broadcast'] else '❌'} Reklama", callback_data=f"edit_toggle_broadcast_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['view_stats'] else '❌'} Statistika", callback_data=f"edit_toggle_view_stats_{target_id}"),
+        types.InlineKeyboardButton(f"{'✅' if perms['write_user'] else '❌'} Foydalanuvchiga yozish", callback_data=f"edit_toggle_write_user_{target_id}"),
+        types.InlineKeyboardButton("💾 Saqlash", callback_data=f"edit_save_{target_id}"),
+        types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="edit_cancel")
+    )
+    bot.edit_message_text(f"✏️ ID: {target_id} ruxsatlarini tahrirlang:", chat_id, message_id, reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('edit_toggle_') and call.from_user.id == ADMIN_ID)
+def edit_toggle_callback(call):
+    _, _, perm_key, target_id_str = call.data.split('_')
+    target_id = int(target_id_str)
+    if target_id in edit_temp:
+        edit_temp[target_id][perm_key] = 1 - edit_temp[target_id][perm_key]
+        bot.answer_callback_query(call.id, f"{perm_key}: {'✅' if edit_temp[target_id][perm_key] else '❌'}", show_alert=False)
+        # Tugmalarni yangilash
+        perms = edit_temp[target_id]
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton(f"{'✅' if perms['add_anime'] else '❌'} Anime yuklash", callback_data=f"edit_toggle_add_anime_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['add_episode'] else '❌'} Qism qo'shish", callback_data=f"edit_toggle_add_episode_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['delete_anime'] else '❌'} Anime o'chirish", callback_data=f"edit_toggle_delete_anime_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['delete_episode'] else '❌'} Qism o'chirish", callback_data=f"edit_toggle_delete_episode_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['premium'] else '❌'} Premium", callback_data=f"edit_toggle_premium_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['broadcast'] else '❌'} Reklama", callback_data=f"edit_toggle_broadcast_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['view_stats'] else '❌'} Statistika", callback_data=f"edit_toggle_view_stats_{target_id}"),
+            types.InlineKeyboardButton(f"{'✅' if perms['write_user'] else '❌'} Foydalanuvchiga yozish", callback_data=f"edit_toggle_write_user_{target_id}"),
+            types.InlineKeyboardButton("💾 Saqlash", callback_data=f"edit_save_{target_id}"),
+            types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="edit_cancel")
+        )
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+    else:
+        bot.answer_callback_query(call.id, "Xatolik")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('edit_save_') and call.from_user.id == ADMIN_ID)
+def edit_save_callback(call):
+    target_id = int(call.data.split('_')[2])
+    if target_id not in edit_temp:
+        return bot.answer_callback_query(call.id, "Xatolik")
+    perms = edit_temp.pop(target_id)
+    conn, cursor = get_db()
+    cursor.execute('''INSERT OR REPLACE INTO admins (user_id, can_add_anime, can_add_episode,
+                     can_delete_anime, can_delete_episode, can_premium, can_broadcast,
+                     can_view_stats, can_write_user)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (target_id, perms['add_anime'], perms['add_episode'],
+                    perms['delete_anime'], perms['delete_episode'], perms['premium'],
+                    perms['broadcast'], perms['view_stats'], perms['write_user']))
+    conn.commit()
+    bot.edit_message_text(f"✅ Admin (ID: {target_id}) tahrirlandi!", call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id)
+    # Ro‘yxatga qaytish
+    send_admin_list_page(call.message.chat.id, 0, call.message.message_id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_cancel" and call.from_user.id == ADMIN_ID)
+def edit_cancel_callback(call):
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    send_admin_list_page(call.message.chat.id, 0, call.message.message_id)
+    bot.answer_callback_query(call.id)
+
+# Vaqtinchalik ma'lumotlar uchun global o‘zgaruvchilar
+add_temp = {}   # admin qo'shish uchun
 
 # ==================== ADMIN FUNKSIYALARI (ruxsat asosida) ====================
 # Statistika
