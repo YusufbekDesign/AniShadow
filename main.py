@@ -1,20 +1,25 @@
 import telebot
 import sqlite3
+import datetime
+import os
 from telebot import types
+from flask import Flask
+from threading import Thread
 
-# 1. SOZLAMALAR
-BOT_TOKEN = os.getenv('8463516034:AAFCzKb7USbIDfG6Tm7LCHbK7NU8EoBQ8kM')
+# ==================== SOZLAMALAR ====================
+# Tokenni environment variable dan olish (Railway yoki boshqa hostda sozlangan)
+BOT_TOKEN = os.getenv('BOT_TOKEN', "8463516034:AAFCzKb7USbIDfG6Tm7LCHbK7NU8EoBQ8kM")  # agar env bo'lmasa, shu ishlaydi
 ADMIN_ID = 7878240647
 BOT_USERNAME = "Anishadowmythicbot"
 
 # Zayavka kanalingiz ID-si va havolasi
-KANAL_ID = -1002361622352          # Agar bu ID to'g'ri bo'lsa, o'zgartirmang
-ZAYAVKA_LINK = "https://t.me/+O08QOzg7QSo1YzEy"   # Yangi link
+KANAL_ID = -1002361622352
+ZAYAVKA_LINK = "https://t.me/+O08QOzg7QSo1YzEy"
 
 # Botni aniqlash
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-# 2. BAZA (Database)
+# ==================== BAZA ====================
 def get_db():
     conn = sqlite3.connect('anishadow_final.db', check_same_thread=False)
     return conn, conn.cursor()
@@ -22,98 +27,173 @@ def get_db():
 def init_db():
     conn, cursor = get_db()
 
-    # 1. Asosiy jadvallar
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS animes (code TEXT PRIMARY KEY, title TEXT, photo_id TEXT, views INTEGER DEFAULT 0)')
+    # Asosiy jadvallar
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, status TEXT DEFAULT "free")')
+    cursor.execute('CREATE TABLE IF NOT EXISTS animes (code TEXT PRIMARY KEY, title TEXT, photo_id TEXT, views INTEGER DEFAULT 0, is_premium INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS episodes (anime_code TEXT, ep_num INTEGER, video_id TEXT)')
 
-    # 2. Support (Adminga murojaat) limiti uchun jadval
+    # Support limit jadvali
     cursor.execute('''CREATE TABLE IF NOT EXISTS support_limits
                      (user_id INTEGER PRIMARY KEY, last_reset TEXT, msg_count INTEGER DEFAULT 0)''')
 
-    # 3. Zayavkalar (Requests) uchun jadval
+    # Zayavkalar jadvali
     cursor.execute('CREATE TABLE IF NOT EXISTS requests (user_id INTEGER PRIMARY KEY)')
 
-    # 4. Mavjud bazaga yangi ustunlarni qo'shish
-    try: cursor.execute('ALTER TABLE users ADD COLUMN username TEXT')
-    except: pass
-    try: cursor.execute('ALTER TABLE users ADD COLUMN status TEXT DEFAULT "free"')
-    except: pass
-    try: cursor.execute('ALTER TABLE animes ADD COLUMN views INTEGER DEFAULT 0')
-    except: pass
-    try: cursor.execute('ALTER TABLE animes ADD COLUMN is_premium INTEGER DEFAULT 0')
-    except: pass
+    # Adminlar jadvali
+    cursor.execute('''CREATE TABLE IF NOT EXISTS admins (
+        user_id INTEGER PRIMARY KEY,
+        can_add_anime INTEGER DEFAULT 0,
+        can_add_episode INTEGER DEFAULT 0,
+        can_delete_anime INTEGER DEFAULT 0,
+        can_delete_episode INTEGER DEFAULT 0,
+        can_premium INTEGER DEFAULT 0,
+        can_broadcast INTEGER DEFAULT 0,
+        can_view_stats INTEGER DEFAULT 0,
+        can_write_user INTEGER DEFAULT 0
+    )''')
 
+    # Super adminni bazaga qo'shish (agar mavjud bo'lmasa)
+    cursor.execute('''INSERT OR IGNORE INTO admins (user_id, can_add_anime, can_add_episode, can_delete_anime,
+                     can_delete_episode, can_premium, can_broadcast, can_view_stats, can_write_user)
+                     VALUES (?, 1,1,1,1,1,1,1,1)''', (ADMIN_ID,))
     conn.commit()
 
-# Bazani ishga tushirish
 init_db()
 
-# --- 3. TEKSHIRUV FUNKSIYASI ---
+# ==================== YORDAMCHI FUNKSIYALAR ====================
 def is_subscribed(user_id):
-    # Admin botdan doim to'siqsiz foydalana oladi
     if str(user_id) == str(ADMIN_ID):
         return True
-
-    # 1. Kanalda a'zomi?
     try:
         status = bot.get_chat_member(KANAL_ID, user_id).status
         if status in ['member', 'administrator', 'creator']:
             return True
     except:
         pass
-
-    # 2. Bazada zayavkasi bormi?
     conn, cursor = get_db()
-    res = cursor.execute("SELECT user_id FROM requests WHERE user_id = ?", (user_id,)).fetchone()
-    if res:
+    cursor.execute("SELECT user_id FROM requests WHERE user_id = ?", (user_id,))
+    if cursor.fetchone():
         return True
-
     return False
 
-# --- 4. ZAYAVKALARNI BAZAGA YOZISH (Sizda shu qism yo'q edi) ---
+def check_subscription(message):
+    user_id = message.from_user.id
+    if not is_subscribed(user_id):
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔗 Kanala qo'shilish", url=ZAYAVKA_LINK))
+        markup.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check_subs"))
+        bot.send_message(message.chat.id,
+                         "🚫 Botdan foydalanish uchun avval kanalimizga qo'shilishingiz kerak.\n\n"
+                         "🔹 Kanal: @AniShadowMythic\n"
+                         "🔹 Quyidagi tugma orqali so'rov yuboring va 'Tekshirish' tugmasini bosing.",
+                         reply_markup=markup)
+        return False
+    return True
+
+def get_admin_perms(user_id):
+    """Foydalanuvchining admin ruxsatlarini qaytaradi (lug'at)"""
+    conn, cursor = get_db()
+    row = cursor.execute('''SELECT can_add_anime, can_add_episode, can_delete_anime,
+                            can_delete_episode, can_premium, can_broadcast,
+                            can_view_stats, can_write_user
+                            FROM admins WHERE user_id = ?''', (user_id,)).fetchone()
+    if not row:
+        return None
+    perms = {
+        'add_anime': row[0],
+        'add_episode': row[1],
+        'delete_anime': row[2],
+        'delete_episode': row[3],
+        'premium': row[4],
+        'broadcast': row[5],
+        'view_stats': row[6],
+        'write_user': row[7]
+    }
+    return perms
+
+def is_admin(user_id):
+    """Foydalanuvchi admin yoki super admin ekanligini tekshiradi"""
+    if user_id == ADMIN_ID:
+        return True
+    conn, cursor = get_db()
+    cursor.execute("SELECT 1 FROM admins WHERE user_id = ?", (user_id,))
+    return cursor.fetchone() is not None
+
+# ==================== ZAYAVKA AVTOMATIK TASDIQLASH ====================
 @bot.chat_join_request_handler()
 def handle_join_request(chat_join_request):
     u_id = chat_join_request.from_user.id
     conn, cursor = get_db()
     cursor.execute("INSERT OR IGNORE INTO requests (user_id) VALUES (?)", (u_id,))
     conn.commit()
-    print(f"✅ ZAYAVKA TUSHDI: {u_id} bazaga saqlandi.")
+    try:
+        bot.approve_chat_join_request(KANAL_ID, u_id)
+        print(f"✅ ZAYAVKA TASDIQLANDI: {u_id}")
+    except Exception as e:
+        print(f"❌ Xatolik: {e}")
 
-# 3. KLAVIATURALAR
+# ==================== KLAVIATURALAR ====================
 def main_kb(user_id):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     kb.add("🔍 Anime izlash", "🔥 Top Animelar")
-    kb.add("📚 Qo'llanma", "✍️ Adminga murojaat") # Yangi tugma
+    kb.add("📚 Qo'llanma", "✍️ Adminga murojaat")
     kb.add("💵 Reklama va Homiy")
-    if user_id == ADMIN_ID:
+    if is_admin(user_id):
         kb.add("⚙️ Admin Panel")
     return kb
 
-def admin_kb():
+def admin_kb(user_id):
+    perms = get_admin_perms(user_id)
+    if perms is None:
+        return types.ReplyKeyboardMarkup(resize_keyboard=True).add("🏠 Bosh menyu")
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    kb.add("➕ Anime yuklash", "🎬 Qism qo'shish")
-    kb.add("📊 Statistika", "📢 Reklama yuborish")
-    kb.add("🗑 Anime o'chirish", "🎬 Qismni o'chirish")
-    kb.add("💎 Premium Sozlamalari", "📩 Foydalanuvchiga yozish") # Yangi tugma
+    if perms['add_anime']:
+        kb.add("➕ Anime yuklash")
+    if perms['add_episode']:
+        kb.add("🎬 Qism qo'shish")
+    if perms['view_stats']:
+        kb.add("📊 Statistika")
+    if perms['broadcast']:
+        kb.add("📢 Reklama yuborish")
+    if perms['delete_anime']:
+        kb.add("🗑 Anime o'chirish")
+    if perms['delete_episode']:
+        kb.add("🎬 Qismni o'chirish")
+    if perms['premium']:
+        kb.add("💎 Premium Sozlamalari")
+    if perms['write_user']:
+        kb.add("📩 Foydalanuvchiga yozish")
+    if user_id == ADMIN_ID:
+        kb.add("👥 Admin boshqaruvi")
     kb.add("🏠 Bosh menyu")
     return kb
+
 def cancel_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🚫 Bekor qilish")
     return kb
 
-# 4. FOYDALANUVCHI MENYUSI (QO'LLANMA VA REKLAMA)
+# ==================== TEKSHIRISH CALLBACK ====================
+@bot.callback_query_handler(func=lambda call: call.data == "check_subs")
+def check_subscription_callback(call):
+    if is_subscribed(call.from_user.id):
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.send_message(call.message.chat.id, "✅ Kanalga a'zoligingiz tasdiqlandi! Endi botdan foydalanishingiz mumkin.", reply_markup=main_kb(call.from_user.id))
+    else:
+        bot.answer_callback_query(call.id, "Hali kanalga qo'shilmagansiz. Iltimos, avval so'rov yuboring.", show_alert=True)
+
+# ==================== BOSHQA MENYU TUGMALARI ====================
 @bot.message_handler(func=lambda m: m.text == "💵 Reklama va Homiy")
 def ad_sponsor(message):
     text = f"🤝 <b>Reklama va Homiylik masalalari bo'yicha:</b>\n\nIltimos, to'g'ridan-to'g'ri adminga yozing:"
     markup = types.InlineKeyboardMarkup()
-    # ID orqali to'g'ridan-to'g'ri lichkaga o'tish tugmasi
     markup.add(types.InlineKeyboardButton("👤 Adminga yozish", url=f"tg://user?id={ADMIN_ID}"))
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "📚 Qo'llanma")
 def guide(message):
+    if not check_subscription(message):
+        return
     text = """📚 <b>Botdan foydalanish qo'llanmasi:</b>
 
 1️⃣ <b>Anime qidirish:</b> Kanalimizdan ko'rmoqchi bo'lgan animengiz kodini toping (Masalan: 101).
@@ -123,28 +203,29 @@ def guide(message):
 <i>Agar biror muammo bo'lsa, "Reklama va Homiy" bo'limi orqali adminga yozishingiz mumkin.</i>"""
     bot.send_message(message.chat.id, text)
 
-# 5. START VA START MATNI
-# 5. START VA START MATNI
+@bot.message_handler(func=lambda m: m.text == "🔍 Anime izlash")
+def search_handler(message):
+    if not check_subscription(message):
+        return
+    bot.send_message(message.chat.id, "Anime kodini yuboring (Masalan: 101):")
+
+@bot.message_handler(func=lambda m: m.text == "🏠 Bosh menyu")
+def back_home(message):
+    bot.send_message(message.chat.id, "Bosh menyuga qaytdik.", reply_markup=main_kb(message.from_user.id))
+
+# ==================== START ====================
 @bot.message_handler(commands=['start'])
 def welcome(message):
     conn, cursor = get_db()
-
-    # Foydalanuvchi ma'lumotlarini olish
     u_id = message.from_user.id
     u_name = message.from_user.username if message.from_user.username else "yo'q"
-
-    # Bazaga tekshirib qo'shish yoki yangilash
     cursor.execute("INSERT OR REPLACE INTO users (user_id, username) VALUES (?, ?)", (u_id, u_name))
     conn.commit()
-
-    # Deep-link (yo'naltirilgan havola) orqali kirsa
     args = message.text.split()
     if len(args) > 1:
         anime_code = args[1]
         show_anime_by_code(message, anime_code)
         return
-
-    # Oddiy start bosilganda chiqadigan xabar
     text = f"""👋 <b>Assalomu alaykum, {message.from_user.first_name}!</b>
 
 Men siz qidirayotgan barcha Animelarni topishga yordam beraman. Buning uchun Anime kodini aniq yozishingiz kerak!
@@ -153,140 +234,228 @@ Men siz qidirayotgan barcha Animelarni topishga yordam beraman. Buning uchun Ani
 📢 <b>Kanalimiz:</b> @AniShadowMythic
 
 ✅ <i>Tushungan bo'lsangiz, Anime kodini yuboring!</i>"""
-
     bot.send_message(message.chat.id, text, reply_markup=main_kb(u_id))
-# 6. ADMIN PANEL
-@bot.message_handler(func=lambda m: m.text == "⚙️ Admin Panel" and m.from_user.id == ADMIN_ID)
+
+# ==================== ADMIN PANEL ====================
+@bot.message_handler(func=lambda m: m.text == "⚙️ Admin Panel" and is_admin(m.from_user.id))
 def open_admin(message):
-    bot.send_message(message.chat.id, "👨‍💻 Admin panelga xush kelibsiz:", reply_markup=admin_kb())
+    bot.send_message(message.chat.id, "👨‍💻 Admin panelga xush kelibsiz:", reply_markup=admin_kb(message.from_user.id))
 
-@bot.message_handler(func=lambda m: m.text == "🏠 Bosh menyu")
-def back_home(message):
-    bot.send_message(message.chat.id, "Bosh menyuga qaytdik.", reply_markup=main_kb(message.from_user.id))
+# ==================== ADMIN BOSHQARUVI (faqat super admin) ====================
+@bot.message_handler(func=lambda m: m.text == "👥 Admin boshqaruvi" and m.from_user.id == ADMIN_ID)
+def manage_admins(message):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("➕ Admin qo'shish", callback_data="add_admin"))
+    markup.add(types.InlineKeyboardButton("📋 Adminlar ro'yxati", callback_data="list_admins"))
+    bot.send_message(message.chat.id, "👥 Admin boshqaruvi:", reply_markup=markup)
 
-# BU YERDA BO'SH QATOR QOLDIRING (Ixtiyoriy, lekin chiroyli chiqadi)
+# Admin qo'shish jarayoni
+pending_perms = {}  # {target_id: {perm_key: value}}  # vaqtinchalik
 
-@bot.message_handler(func=lambda m: m.text == "📊 Statistika" and m.from_user.id == ADMIN_ID)
-def show_stats(message):
+@bot.callback_query_handler(func=lambda call: call.data == "add_admin" and call.from_user.id == ADMIN_ID)
+def add_admin_step1(call):
+    msg = bot.send_message(call.message.chat.id, "➕ Admin qilmoqchi bo‘lgan foydalanuvchining ID raqamini yuboring:")
+    bot.register_next_step_handler(msg, add_admin_step2)
+
+def add_admin_step2(message):
+    try:
+        target_id = int(message.text)
+    except:
+        return bot.send_message(message.chat.id, "❌ Noto‘g‘ri ID. Bekor qilindi.", reply_markup=admin_kb(ADMIN_ID))
+    # Ruxsatlarni tanlash uchun tugmalar
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("➕ Anime yuklash", callback_data=f"perm_toggle_add_anime_{target_id}"),
+        types.InlineKeyboardButton("🎬 Qism qo'shish", callback_data=f"perm_toggle_add_ep_{target_id}"),
+        types.InlineKeyboardButton("🗑 Anime o'chirish", callback_data=f"perm_toggle_del_anime_{target_id}"),
+        types.InlineKeyboardButton("🗑 Qism o'chirish", callback_data=f"perm_toggle_del_ep_{target_id}"),
+        types.InlineKeyboardButton("💎 Premium", callback_data=f"perm_toggle_prem_{target_id}"),
+        types.InlineKeyboardButton("📢 Reklama", callback_data=f"perm_toggle_broadcast_{target_id}"),
+        types.InlineKeyboardButton("📊 Statistika", callback_data=f"perm_toggle_stats_{target_id}"),
+        types.InlineKeyboardButton("📩 Foydalanuvchiga yozish", callback_data=f"perm_toggle_write_{target_id}"),
+        types.InlineKeyboardButton("✅ Tugatish", callback_data=f"perm_done_{target_id}")
+    )
+    pending_perms[target_id] = {
+        'add_anime': 0, 'add_episode': 0, 'delete_anime': 0,
+        'delete_episode': 0, 'premium': 0, 'broadcast': 0,
+        'view_stats': 0, 'write_user': 0
+    }
+    bot.send_message(message.chat.id, f"👤 ID: {target_id} uchun ruxsatlarni tanlang:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('perm_toggle_') and call.from_user.id == ADMIN_ID)
+def perm_toggle_callback(call):
+    parts = call.data.split('_')
+    action = parts[2]  # add_anime, add_ep, del_anime, del_ep, prem, broadcast, stats, write
+    target_id = int(parts[3])
+    perm_map = {
+        'add_anime': 'add_anime',
+        'add_ep': 'add_episode',
+        'del_anime': 'delete_anime',
+        'del_ep': 'delete_episode',
+        'prem': 'premium',
+        'broadcast': 'broadcast',
+        'stats': 'view_stats',
+        'write': 'write_user'
+    }
+    perm_key = perm_map.get(action)
+    if perm_key and target_id in pending_perms:
+        pending_perms[target_id][perm_key] = 1 - pending_perms[target_id][perm_key]  # toggle
+        status = "✅" if pending_perms[target_id][perm_key] else "❌"
+        bot.answer_callback_query(call.id, f"{status} o‘zgartirildi", show_alert=False)
+    else:
+        bot.answer_callback_query(call.id, "Xatolik")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('perm_done_') and call.from_user.id == ADMIN_ID)
+def perm_done_callback(call):
+    target_id = int(call.data.split('_')[2])
+    if target_id not in pending_perms:
+        return bot.answer_callback_query(call.id, "Xatolik")
+    perms = pending_perms.pop(target_id)
     conn, cursor = get_db()
+    cursor.execute('''INSERT OR REPLACE INTO admins (user_id, can_add_anime, can_add_episode,
+                     can_delete_anime, can_delete_episode, can_premium, can_broadcast,
+                     can_view_stats, can_write_user)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                   (target_id, perms['add_anime'], perms['add_episode'],
+                    perms['delete_anime'], perms['delete_episode'], perms['premium'],
+                    perms['broadcast'], perms['view_stats'], perms['write_user']))
+    conn.commit()
+    bot.edit_message_text(f"✅ Admin (ID: {target_id}) muvaffaqiyatli qo‘shildi!", call.message.chat.id, call.message.message_id)
+    bot.answer_callback_query(call.id)
 
-    # 1. Umumiy sonlarni olish
+# Adminlar ro'yxati
+@bot.callback_query_handler(func=lambda call: call.data == "list_admins" and call.from_user.id == ADMIN_ID)
+def list_admins(call):
+    conn, cursor = get_db()
+    admins = cursor.execute('''SELECT user_id, can_add_anime, can_add_episode, can_delete_anime,
+                                can_delete_episode, can_premium, can_broadcast,
+                                can_view_stats, can_write_user FROM admins''').fetchall()
+    if not admins:
+        text = "👥 Adminlar yo‘q."
+    else:
+        text = "👥 Adminlar ro‘yxati:\n\n"
+        for a in admins:
+            uid = a[0]
+            perms = []
+            if a[1]: perms.append("➕ Anime")
+            if a[2]: perms.append("🎬 Qism")
+            if a[3]: perms.append("🗑 Anime o'chir")
+            if a[4]: perms.append("🗑 Qism o'chir")
+            if a[5]: perms.append("💎 Premium")
+            if a[6]: perms.append("📢 Reklama")
+            if a[7]: perms.append("📊 Stat")
+            if a[8]: perms.append("📩 Xabar")
+            perm_str = ", ".join(perms) if perms else "Hech qanday ruxsat yo‘q"
+            text += f"👤 ID: <code>{uid}</code>\n   Ruxsatlar: {perm_str}\n\n"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='HTML')
+
+# ==================== ADMIN FUNKSIYALARI (ruxsat asosida) ====================
+# Statistika
+@bot.message_handler(func=lambda m: m.text == "📊 Statistika")
+def show_stats(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['view_stats']:
+        return
+    conn, cursor = get_db()
     total_users = cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     total_animes = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
-
-    # 2. Oxirgi 10 ta foydalanuvchini olish
     last_users = cursor.execute("SELECT user_id, username FROM users ORDER BY rowid DESC LIMIT 10").fetchall()
     u_text = ""
     for u in last_users:
-        # ID-ni bosiladigan linkka aylantiramiz (tg://user?id=...)
         user_link = f'<a href="tg://user?id={u[0]}">{u[0]}</a>'
-
-        # Username None bo'lsa yoki bo'sh bo'lsa "yo'q" deb ko'rsatamiz
         username = f"@{u[1]}" if u[1] and u[1] != "yo'q" else "username yo'q"
-
         u_text += f"👤 {user_link} | {username}\n"
-
-    # 3. Top 5 ta ko'p ko'rilgan anime
     top_animes = cursor.execute("SELECT title, views FROM animes ORDER BY views DESC LIMIT 5").fetchall()
     a_text = ""
     for a in top_animes:
         a_text += f"🎬 {a[0]} — {a[1]} marta\n"
-
-    # Natijani yuborish
     text = f"📊 <b>Bot Statistikasi</b>\n\n" \
            f"👥 Jami foydalanuvchilar: {total_users}\n" \
            f"🎬 Jami animelar: {total_animes}\n\n" \
            f"🔝 <b>Eng ko'p ko'rilganlar:</b>\n{a_text if a_text else 'Hali ko`rilmagan'}\n\n" \
            f"🆕 <b>Oxirgi kirganlar (ID ustiga bosing):</b>\n{u_text}"
-
     bot.send_message(message.chat.id, text, parse_mode='HTML')
 
-# --- SHU YERDAN REKLAMA KODINI QO'SHASIZ ---
-@bot.message_handler(func=lambda m: m.text == "📢 Reklama yuborish" and m.from_user.id == ADMIN_ID)
+# Reklama yuborish
+@bot.message_handler(func=lambda m: m.text == "📢 Reklama yuborish")
 def start_broadcast(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['broadcast']:
+        return
     msg = bot.send_message(message.chat.id, "📢 <b>Reklama xabarini yuboring:</b>", reply_markup=types.ReplyKeyboardRemove())
     bot.register_next_step_handler(msg, send_broadcast)
 
 def send_broadcast(message):
     conn, cursor = get_db()
     users = cursor.execute("SELECT user_id FROM users").fetchall()
-
     count = 0
     bot.send_message(message.chat.id, "🚀 Reklama tarqatilmoqda...")
-
     for user in users:
         try:
             bot.copy_message(user[0], message.chat.id, message.message_id)
             count += 1
         except:
             continue
+    bot.send_message(message.chat.id, f"✅ Reklama {count} kishiga yuborildi!", reply_markup=admin_kb(message.from_user.id))
 
-    bot.send_message(message.chat.id, f"✅ Reklama {count} kishiga yuborildi!", reply_markup=admin_kb())
-
-# 7. ANIME YUKLASH (Bekor qilish tugmasi bilan)
-@bot.message_handler(func=lambda m: m.text == "➕ Anime yuklash" and m.from_user.id == ADMIN_ID)
+# Anime yuklash (ruxsat va super admin xabari)
+@bot.message_handler(func=lambda m: m.text == "➕ Anime yuklash")
 def add_step_1(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['add_anime']:
+        return
     msg = bot.send_message(message.chat.id, "<b>1. Anime uchun POSTER (rasm) yuboring:</b>", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, add_step_2)
 
 def add_step_2(message):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     if message.content_type != 'photo':
         msg = bot.send_message(message.chat.id, "❌ Faqat rasm yuboring! Yoki jarayonni bekor qiling:", reply_markup=cancel_kb())
         bot.register_next_step_handler(msg, add_step_2)
         return
-
     photo_id = message.photo[-1].file_id
     msg = bot.send_message(message.chat.id, "<b>2. Anime uchun KOD kiriting (Masalan: 101):</b>", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, add_step_3, photo_id)
 
 def add_step_3(message, photo_id):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     code = message.text
     msg = bot.send_message(message.chat.id, "<b>3. Anime NOMINI kiriting:</b>", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, add_step_final, photo_id, code)
 
 def add_step_final(message, photo_id, code):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     title = message.text
     conn, cursor = get_db()
     cursor.execute("INSERT OR REPLACE INTO animes (code, title, photo_id) VALUES (?, ?, ?)", (code, title, photo_id))
     conn.commit()
-
-    # --- TERMINAL MONITORING ---
-    admin_name = message.from_user.first_name
-    admin_id = message.from_user.id
-    print(f"➕ YANGI ANIME: {title} (Kod: {code}) | Yukladi: {admin_name} (ID: {admin_id})")
-    # ---------------------------
-
+    # Super adminga xabar
+    bot.send_message(ADMIN_ID, f"➕ <b>Yangi anime qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name} (ID: {message.from_user.id})\n<b>Nomi:</b> {title}\n<b>Kodi:</b> {code}", parse_mode='HTML')
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
-    bot.send_message(message.chat.id, f"✅ <b>Anime saqlandi!</b>\n\n🎬 Nomi: {title}\n📌 Kodi: {code}\n🔗 Havola: <code>{link}</code>", reply_markup=admin_kb())
-# # 8. QISM QO'SHISH (Bekor qilish tugmasi bilan)
-@bot.message_handler(func=lambda m: m.text == "🎬 Qism qo'shish" and m.from_user.id == ADMIN_ID)
+    bot.send_message(message.chat.id, f"✅ <b>Anime saqlandi!</b>\n\n🎬 Nomi: {title}\n📌 Kodi: {code}\n🔗 Havola: <code>{link}</code>", reply_markup=admin_kb(message.from_user.id))
+
+# Qism qo'shish (ruxsat va super admin xabari)
+@bot.message_handler(func=lambda m: m.text == "🎬 Qism qo'shish")
 def ep_step_1(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['add_episode']:
+        return
     conn, cursor = get_db()
     animes = cursor.execute("SELECT code, title FROM animes").fetchall()
-
     if not animes:
         return bot.send_message(message.chat.id, "❌ Hali bazaga hech qanday anime qo'shilmagan!")
-
     markup = types.InlineKeyboardMarkup(row_width=1)
     for a in animes:
         markup.add(types.InlineKeyboardButton(f"🎬 {a[1]} (Kod: {a[0]})", callback_data=f"addep_{a[0]}"))
-
     bot.send_message(message.chat.id, "<b>Qaysi animega qism qo'shamiz? Quyidagi ro'yxatdan tanlang:</b>", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('addep_'))
 def ep_step_2(call):
     code = call.data.split('_')[1]
     bot.delete_message(call.message.chat.id, call.message.message_id)
-
     msg = bot.send_message(call.message.chat.id,
                            f"✅ Anime tanlandi (Kod: {code}).\n\n<b>Endi nechanchi qism ekanligini yozing (Masalan: 1):</b>",
                            reply_markup=cancel_kb())
@@ -294,68 +463,128 @@ def ep_step_2(call):
 
 def ep_step_3(message, code):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Qism qo'shish bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Qism qo'shish bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     num = message.text
     if not num.isdigit():
         msg = bot.send_message(message.chat.id, "❌ Iltimos, faqat RAQAM yozing! (Yoki bekor qiling):", reply_markup=cancel_kb())
         bot.register_next_step_handler(msg, ep_step_3, code)
         return
-
     msg = bot.send_message(message.chat.id, f"<b>{num}-qism VIDEOSINI yuboring:</b>", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, ep_step_final, code, num)
 
 def ep_step_final(message, code, num):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Qism qo'shish bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Qism qo'shish bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     if message.content_type != 'video':
         msg = bot.send_message(message.chat.id, "❌ Faqat video yuboring! (Yoki bekor qiling):", reply_markup=cancel_kb())
         bot.register_next_step_handler(msg, ep_step_final, code, num)
         return
-
     conn, cursor = get_db()
     cursor.execute("INSERT INTO episodes VALUES (?, ?, ?)", (code, int(num), message.video.file_id))
     conn.commit()
+    # Super adminga xabar
+    bot.send_message(ADMIN_ID, f"🎬 <b>Yangi qism qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name} (ID: {message.from_user.id})\n<b>Anime kodi:</b> {code}\n<b>Qism:</b> {num}", parse_mode='HTML')
+    bot.send_message(message.chat.id, f"✅ <b>{code}</b>-anime uchun <b>{num}</b>-qism muvaffaqiyatli saqlandi!", reply_markup=admin_kb(message.from_user.id))
 
-    # --- TERMINAL MONITORING ---
-    admin_name = message.from_user.first_name
-    admin_id = message.from_user.id
-    print(f"🎬 YANGI QISM: {code}-kodli animega {num}-qism qo'shildi | Yukladi: {admin_name} (ID: {admin_id})")
-    # ---------------------------
-
-    bot.send_message(message.chat.id, f"✅ <b>{code}</b>-anime uchun <b>{num}</b>-qism muvaffaqiyatli saqlandi!", reply_markup=admin_kb())
-# 9. QIDIRUV VA VIDEO KO'RISH
-def show_anime_by_code(message, code):
+# Anime o'chirish (ruxsat)
+@bot.message_handler(func=lambda m: m.text == "🗑 Anime o'chirish")
+def delete_anime_list(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['delete_anime']:
+        return
     conn, cursor = get_db()
+    animes = cursor.execute("SELECT code, title FROM animes").fetchall()
+    if not animes:
+        return bot.send_message(message.chat.id, "❌ Bazada o'chirish uchun anime yo'q.")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for a in animes:
+        markup.add(types.InlineKeyboardButton(f"❌ {a[1]} (Kod: {a[0]})", callback_data=f"del_{a[0]}"))
+    bot.send_message(message.chat.id, "🗑 Qaysi animeni o'chirmoqchisiz?", reply_markup=markup, parse_mode='HTML')
 
-    # Ko'rishlar sonini oshirish
+@bot.callback_query_handler(func=lambda call: call.data.startswith('del_'))
+def delete_anime_final(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['delete_anime']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
+    anime_code = call.data.split('_')[1]
+    conn, cursor = get_db()
+    cursor.execute("DELETE FROM animes WHERE code = ?", (anime_code,))
+    cursor.execute("DELETE FROM episodes WHERE anime_code = ?", (anime_code,))
+    conn.commit()
+    bot.answer_callback_query(call.id, "O'chirildi!")
+    bot.edit_message_text(f"✅ Kod: {anime_code} bazadan o'chirildi.", call.message.chat.id, call.message.message_id)
+
+# Qismni o'chirish (ruxsat)
+@bot.message_handler(func=lambda m: m.text == "🎬 Qismni o'chirish")
+def delete_ep_start(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['delete_episode']:
+        return
+    conn, cursor = get_db()
+    animes = cursor.execute("SELECT code, title FROM animes").fetchall()
+    if not animes:
+        return bot.send_message(message.chat.id, "❌ Bazada birorta ham anime yo'q.")
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for a in animes:
+        markup.add(types.InlineKeyboardButton(f"🎬 {a[1]}", callback_data=f"epdel_list_{a[0]}"))
+    bot.send_message(message.chat.id, "<b>Qaysi animening qismini o'chirmoqchisiz?</b>", reply_markup=markup, parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('epdel_list_'))
+def delete_ep_select(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['delete_episode']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
+    anime_code = call.data.split('_')[2]
+    conn, cursor = get_db()
+    eps = cursor.execute("SELECT ep_num FROM episodes WHERE anime_code = ? ORDER BY ep_num ASC", (anime_code,)).fetchall()
+    if not eps:
+        return bot.answer_callback_query(call.id, "Bu animeda hali qismlar yo'q!", show_alert=True)
+    markup = types.InlineKeyboardMarkup(row_width=5)
+    btns = []
+    for e in eps:
+        btns.append(types.InlineKeyboardButton(f"{e[0]}", callback_data=f"epdel_exec_{anime_code}_{e[0]}"))
+    markup.add(*btns)
+    markup.add(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_del_anime"))
+    bot.edit_message_text(f"🔢 <b>Kod: {anime_code}</b>\n\nO'chirmoqchi bo'lgan qismingizni tanlang:",
+                          call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('epdel_exec_'))
+def delete_ep_final(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['delete_episode']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
+    data = call.data.split('_')
+    anime_code = data[2]
+    ep_num = data[3]
+    conn, cursor = get_db()
+    cursor.execute("DELETE FROM episodes WHERE anime_code = ? AND ep_num = ?", (anime_code, ep_num))
+    conn.commit()
+    bot.answer_callback_query(call.id, f"{ep_num}-qism o'chirildi!", show_alert=True)
+    delete_ep_select(call)  # qayta ro'yxatni ko'rsatish
+
+@bot.callback_query_handler(func=lambda call: call.data == "back_to_del_anime")
+def back_to_del_anime(call):
+    delete_ep_start(call.message)
+
+# ==================== ANIME KO'RSATISH VA TOP ====================
+def show_anime_by_code(message, code):
+    if not check_subscription(message):
+        return
+    conn, cursor = get_db()
     cursor.execute("UPDATE animes SET views = views + 1 WHERE code = ?", (code,))
     conn.commit()
-
-    # Bazadan hamma ma'lumotni olamiz
     anime = cursor.execute("SELECT code, title, photo_id, views FROM animes WHERE code = ?", (code,)).fetchone()
-
     if anime:
-        # ENDI 4 TA MA'LUMOTNI QABUL QILAMIZ:
         a_code, title, photo, views = anime
-
         eps = cursor.execute("SELECT ep_num FROM episodes WHERE anime_code = ? ORDER BY ep_num ASC", (a_code,)).fetchall()
         markup = types.InlineKeyboardMarkup(row_width=5)
         btns = [types.InlineKeyboardButton(str(e[0]), callback_data=f"ep_{a_code}_{e[0]}") for e in eps]
-        markup.add(*btns)
-
-        # Yuklab olish tugmasini ham qo'shib qo'yamiz
+        if btns:
+            markup.add(*btns)
         markup.add(types.InlineKeyboardButton("• Yuklab Olish •", url=f"https://t.me/{BOT_USERNAME}?start={a_code}"))
-
-        # Captionda ko'rishlar sonini ham ko'rsatamiz
         bot.send_photo(message.chat.id, photo, caption=f"🎬 <b>{title}</b>\n\n📌 Kodi: {a_code}\n👁 Ko'rildi: {views if views else 0}", reply_markup=markup)
     else:
         bot.send_message(message.chat.id, "❌ Kechirasiz, bunday kodli anime topilmadi.")
-
-@bot.message_handler(func=lambda m: m.text == "🔍 Anime izlash")
-def search_handler(message):
-    bot.send_message(message.chat.id, "Anime kodini yuboring (Masalan: 101):")
 
 @bot.message_handler(func=lambda m: m.text.isdigit())
 def search_by_digit(message):
@@ -370,152 +599,58 @@ def play_video(call):
         bot.send_video(call.message.chat.id, video[0], caption=f"🎬 <b>{code}</b> | {num}-qism")
     else:
         bot.answer_callback_query(call.id, "Video topilmadi!")
-# ... tepadagi boshqa kodlaringiz ...
-# --- TOP ANIMELAR VA SAHIFALASH ---
 
+# Top animelar
 @bot.message_handler(func=lambda m: m.text == "🔥 Top Animelar")
 def top_animes(message):
-    send_top_page(message.chat.id, 0) # Birinchi sahifani yuboramiz (offset = 0)
+    if not check_subscription(message):
+        return
+    send_top_page(message.chat.id, 0)
 
 def send_top_page(chat_id, offset, message_id=None):
     conn, cursor = get_db()
-
-    # Jami animelar sonini aniqlaymiz
     total_animes = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
-
-    # 10 ta animeni views bo'yicha kamayish tartibida olamiz
     animes = cursor.execute("""
         SELECT code, title, views
         FROM animes
         ORDER BY views DESC
         LIMIT 10 OFFSET ?""", (offset,)).fetchall()
-
     if not animes:
         bot.send_message(chat_id, "Bazada hali animelar yo'q.")
         return
-
     text = f"🔥 <b>Eng ko'p ko'rilgan animelar:</b>\n\n"
     markup = types.InlineKeyboardMarkup(row_width=1)
-
     for i, a in enumerate(animes, start=offset + 1):
-        # Ro'yxat ko'rinishi
         text += f"{i}. {a[1]} — (👁 {a[2]})\n"
-        # Har bir animega to'g'ridan-to'g'ri o'tish tugmasi
         markup.add(types.InlineKeyboardButton(f"🎬 {a[1]} (Kod: {a[0]})", callback_data=f"show_{a[0]}"))
-
-    # Navigatsiya tugmalari (Orqaga va Keyingisi)
     nav_btns = []
     if offset > 0:
         nav_btns.append(types.InlineKeyboardButton("⬅️ Orqaga", callback_data=f"top_{offset-10}"))
-
     if offset + 10 < total_animes:
         nav_btns.append(types.InlineKeyboardButton("Keyingisi ➡️", callback_data=f"top_{offset+10}"))
-
     if nav_btns:
         markup.row(*nav_btns)
-
     if message_id:
         bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode='HTML')
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode='HTML')
 
-# Tugmalar bosilganda sahifani yangilash
 @bot.callback_query_handler(func=lambda call: call.data.startswith('top_'))
 def top_callback(call):
     offset = int(call.data.split('_')[1])
     send_top_page(call.message.chat.id, offset, call.message.message_id)
 
-# Ro'yxatdagi anime tugmasini bossa o'sha animeni ko'rsatish
 @bot.callback_query_handler(func=lambda call: call.data.startswith('show_'))
 def show_callback(call):
     code = call.data.split('_')[1]
     show_anime_by_code(call.message, code)
 
-# --- 10. ANIME O'CHIRISH (POLINGDAN TEPADA) ---
-@bot.message_handler(func=lambda m: m.text == "🗑 Anime o'chirish" and m.from_user.id == ADMIN_ID)
-def delete_anime_list(message):
-    conn, cursor = get_db()
-    animes = cursor.execute("SELECT code, title FROM animes").fetchall()
-    if not animes:
-        return bot.send_message(message.chat.id, "❌ Bazada o'chirish uchun anime yo'q.")
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for a in animes:
-        markup.add(types.InlineKeyboardButton(f"❌ {a[1]} (Kod: {a[0]})", callback_data=f"del_{a[0]}"))
-
-    bot.send_message(message.chat.id, "🗑 Qaysi animeni o'chirmoqchisiz?", reply_markup=markup, parse_mode='HTML')
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('del_'))
-def delete_anime_final(call):
-    anime_code = call.data.split('_')[1]
-    conn, cursor = get_db()
-    cursor.execute("DELETE FROM animes WHERE code = ?", (anime_code,))
-    cursor.execute("DELETE FROM episodes WHERE anime_code = ?", (anime_code,))
-    conn.commit()
-
-    bot.answer_callback_query(call.id, "O'chirildi!")
-    bot.edit_message_text(f"✅ Kod: {anime_code} bazadan o'chirildi.", call.message.chat.id, call.message.message_id)
-# --- QISMNI O'CHIRISH BOSHLANISHI ---
-
-# 1. Animeni tanlash (Qismni o'chirish uchun)
-@bot.message_handler(func=lambda m: m.text == "🎬 Qismni o'chirish" and m.from_user.id == ADMIN_ID)
-def delete_ep_start(message):
-    conn, cursor = get_db()
-    animes = cursor.execute("SELECT code, title FROM animes").fetchall()
-
-    if not animes:
-        return bot.send_message(message.chat.id, "❌ Bazada birorta ham anime yo'q.")
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for a in animes:
-        # Callback: epdel_list_{kod}
-        markup.add(types.InlineKeyboardButton(f"🎬 {a[1]}", callback_data=f"epdel_list_{a[0]}"))
-
-    bot.send_message(message.chat.id, "<b>Qaysi animening qismini o'chirmoqchisiz?</b>", reply_markup=markup, parse_mode='HTML')
-
-# 2. Tanlangan animening qismlarini ko'rsatish
-@bot.callback_query_handler(func=lambda call: call.data.startswith('epdel_list_'))
-def delete_ep_select(call):
-    anime_code = call.data.split('_')[2]
-    conn, cursor = get_db()
-
-    # Shu animega tegishli hamma qismlarni olamiz
-    eps = cursor.execute("SELECT ep_num FROM episodes WHERE anime_code = ? ORDER BY ep_num ASC", (anime_code,)).fetchall()
-
-    if not eps:
-        return bot.answer_callback_query(call.id, "Bu animeda hali qismlar yo'q!", show_alert=True)
-
-    markup = types.InlineKeyboardMarkup(row_width=5)
-    btns = []
-    for e in eps:
-        # Callback: epdel_exec_{kod}_{qism_raqami}
-        btns.append(types.InlineKeyboardButton(f"{e[0]}", callback_data=f"epdel_exec_{anime_code}_{e[0]}"))
-
-    markup.add(*btns)
-    markup.add(types.InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_del_anime"))
-
-    bot.edit_message_text(f"🔢 <b>Kod: {anime_code}</b>\n\nO'chirmoqchi bo'lgan qismingizni tanlang:",
-                          call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
-
-# 3. Qismni o'chirishni bajarish
-@bot.callback_query_handler(func=lambda call: call.data.startswith('epdel_exec_'))
-def delete_ep_final(call):
-    data = call.data.split('_')
-    anime_code = data[2]
-    ep_num = data[3]
-
-    conn, cursor = get_db()
-    # Faqat bitta qismni o'chirish
-    cursor.execute("DELETE FROM episodes WHERE anime_code = ? AND ep_num = ?", (anime_code, ep_num))
-    conn.commit()
-
-    bot.answer_callback_query(call.id, f"{ep_num}-qism o'chirildi!", show_alert=True)
-
-    # Ro'yxatni yangilash (qolgan qismlarni qayta ko'rsatish)
-    delete_ep_select(call)
-    # 11. PREMIUM BOSHQARUV PANELI
-@bot.message_handler(func=lambda m: m.text == "💎 Premium Sozlamalari" and m.from_user.id == ADMIN_ID)
+# ==================== PREMIUM SOZLAMALARI ====================
+@bot.message_handler(func=lambda m: m.text == "💎 Premium Sozlamalari")
 def premium_settings(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['premium']:
+        return
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
         types.InlineKeyboardButton("⭐ Animeni Premium qilish", callback_data="make_anime_prem"),
@@ -523,25 +658,26 @@ def premium_settings(message):
     )
     bot.send_message(message.chat.id, "💎 <b>Premium boshqaruv bo'limi:</b>", reply_markup=markup, parse_mode='HTML')
 
-# --- Animeni Premium qilish (Ro'yxatdan tanlash) ---
 @bot.callback_query_handler(func=lambda call: call.data == "make_anime_prem")
 def prem_anime_list(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['premium']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
     conn, cursor = get_db()
-    # Faqat hali premium bo'lmagan animelarni chiqaramiz
     animes = cursor.execute("SELECT code, title FROM animes WHERE is_premium = 0").fetchall()
-
     if not animes:
         return bot.answer_callback_query(call.id, "Hamma animelar premium yoki baza bo'sh!", show_alert=True)
-
     markup = types.InlineKeyboardMarkup(row_width=1)
     for a in animes:
         markup.add(types.InlineKeyboardButton(f"💎 {a[1]}", callback_data=f"setprem_an_{a[0]}"))
-
     bot.edit_message_text("💎 <b>Premium qilmoqchi bo'lgan animengizni tanlang:</b>",
                           call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode='HTML')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('setprem_an_'))
 def prem_anime_exec(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['premium']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
     code = call.data.split('_')[2]
     conn, cursor = get_db()
     cursor.execute("UPDATE animes SET is_premium = 1 WHERE code = ?", (code,))
@@ -549,81 +685,69 @@ def prem_anime_exec(call):
     bot.answer_callback_query(call.id, "Anime premium bo'ldi!")
     bot.edit_message_text(f"✅ Kod: {code} bo'lgan anime <b>Premium</b> qilindi!", call.message.chat.id, call.message.message_id, parse_mode='HTML')
 
-# --- Foydalanuvchiga Premium berish (ID orqali yozish) ---
 @bot.callback_query_handler(func=lambda call: call.data == "make_user_prem")
 def prem_user_ask(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['premium']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
     msg = bot.send_message(call.message.chat.id, "👤 <b>Premium bermoqchi bo'lgan foydalanuvchi ID raqamini yuboring:</b>\n(ID-ni statistikadan olishingiz mumkin)", parse_mode='HTML')
     bot.register_next_step_handler(msg, prem_user_exec)
 
 def prem_user_exec(message):
     user_id = message.text
     if not user_id.isdigit():
-        return bot.send_message(message.chat.id, "❌ Faqat ID raqamini yuboring!", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Faqat ID raqamini yuboring!", reply_markup=admin_kb(message.from_user.id))
     conn, cursor = get_db()
     cursor.execute("UPDATE users SET status = 'premium' WHERE user_id = ?", (user_id,))
     conn.commit()
-
-    bot.send_message(message.chat.id, f"✅ Foydalanuvchi {user_id} muvaffaqiyatli <b>Premium</b> qilindi!", reply_markup=admin_kb(), parse_mode='HTML')
-    # Foydalanuvchining o'ziga ham xabar yuboramiz
+    bot.send_message(message.chat.id, f"✅ Foydalanuvchi {user_id} muvaffaqiyatli <b>Premium</b> qilindi!", reply_markup=admin_kb(message.from_user.id), parse_mode='HTML')
     try:
-        bot.send_message(user_id, "🎉 <b>Tabriklaymiz! Admin sizga Premium statusini berdi!</b>\nEndi barcha animelar siz uchun ochiq.", parse_mode='HTML')
+        bot.send_message(int(user_id), "🎉 <b>Tabriklaymiz! Admin sizga Premium statusini berdi!</b>\nEndi barcha animelar siz uchun ochiq.", parse_mode='HTML')
     except: pass
-import datetime
-# ==========================================================
-# 12. FOYDALANUVCHIGA XABAR YUBORISH (ADMIN UCHUN)
-# ==========================================================
 
-@bot.message_handler(func=lambda m: m.text == "📩 Foydalanuvchiga yozish" and m.from_user.id == ADMIN_ID)
+# ==================== FOYDALANUVCHIGA XABAR YUBORISH ====================
+@bot.message_handler(func=lambda m: m.text == "📩 Foydalanuvchiga yozish")
 def list_users_for_msg(message):
-    send_user_list_page(message.chat.id, 0)
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['write_user']:
+        return
+    send_user_list_page(message.chat.id, 0, user_id=message.from_user.id)
 
-def send_user_list_page(chat_id, offset, message_id=None):
+def send_user_list_page(chat_id, offset, user_id, message_id=None):
     conn, cursor = get_db()
-    # Jami foydalanuvchilar sonini olamiz
     total_users = cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    # 10 tadan chiqarish
     users = cursor.execute("SELECT user_id, username FROM users LIMIT 10 OFFSET ?", (offset,)).fetchall()
-
     if not users:
         return bot.send_message(chat_id, "❌ Bazada foydalanuvchilar topilmadi.")
-
     markup = types.InlineKeyboardMarkup(row_width=1)
     for u in users:
-        # Username bo'lsa username, bo'lmasa ID-ni ko'rsatamiz
         name = f"@{u[1]}" if u[1] else f"ID: {u[0]}"
         markup.add(types.InlineKeyboardButton(f"👤 {name}", callback_data=f"msguser_{u[0]}"))
-
-    # Sahifalash (Orqaga / Keyingisi)
     nav_btns = []
     if offset > 0:
         nav_btns.append(types.InlineKeyboardButton("⬅️ Orqaga", callback_data=f"usrs_{offset-10}"))
     if offset + 10 < total_users:
         nav_btns.append(types.InlineKeyboardButton("Keyingisi ➡️", callback_data=f"usrs_{offset+10}"))
-
     if nav_btns:
         markup.row(*nav_btns)
-
     text = "👤 <b>Xabar yubormoqchi bo'lgan foydalanuvchini tanlang:</b>"
-
     if message_id:
         bot.edit_message_text(text, chat_id, message_id, reply_markup=markup, parse_mode='HTML')
     else:
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode='HTML')
 
-# Sahifalarni almashtirish uchun callback
 @bot.callback_query_handler(func=lambda call: call.data.startswith('usrs_'))
 def user_list_callback(call):
     offset = int(call.data.split('_')[1])
-    send_user_list_page(call.message.chat.id, offset, call.message.message_id)
+    send_user_list_page(call.message.chat.id, offset, call.from_user.id, call.message.message_id)
 
-# Foydalanuvchi tanlangandan keyin xabar yozishni so'rash
 @bot.callback_query_handler(func=lambda call: call.data.startswith('msguser_'))
 def ask_admin_message(call):
+    perms = get_admin_perms(call.from_user.id)
+    if not perms or not perms['write_user']:
+        return bot.answer_callback_query(call.id, "Sizda bu ruxsat yo'q!", show_alert=True)
     target_id = call.data.split('_')[1]
-    # Inline tugmalarni o'chirib, yangi xabar yuboramiz
     bot.delete_message(call.message.chat.id, call.message.message_id)
-
     msg = bot.send_message(call.message.chat.id,
                            f"📝 <b>ID: {target_id} bo'lgan foydalanuvchiga xabaringizni yozing:</b>\n\n(Bekor qilish uchun tugmani bosing)",
                            reply_markup=cancel_kb(), parse_mode='HTML')
@@ -631,106 +755,82 @@ def ask_admin_message(call):
 
 def send_final_msg_to_user(message, target_id):
     if message.text == "🚫 Bekor qilish":
-        return bot.send_message(message.chat.id, "❌ Bekor qilindi.", reply_markup=admin_kb())
-
+        return bot.send_message(message.chat.id, "❌ Bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
     try:
-        # Foydalanuvchiga boradigan xabar formati
         full_msg = f"📩 <b>Admindan xabar keldi:</b>\n\n{message.text}"
-        bot.send_message(target_id, full_msg, parse_mode='HTML')
-
-        # Adminga tasdiqlash xabari
-        bot.send_message(message.chat.id, f"✅ Xabar (ID: {target_id}) ga muvaffaqiyatli yuborildi!", reply_markup=admin_kb())
+        bot.send_message(int(target_id), full_msg, parse_mode='HTML')
+        bot.send_message(message.chat.id, f"✅ Xabar (ID: {target_id}) ga muvaffaqiyatli yuborildi!", reply_markup=admin_kb(message.from_user.id))
         print(f"📧 ADMIN_MSG: {target_id} ga xabar yubordi.")
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Xatolik! Foydalanuvchi botni bloklagan bo'lishi mumkin.\n\n{e}", reply_markup=admin_kb())
+        bot.send_message(message.chat.id, f"❌ Xatolik! Foydalanuvchi botni bloklagan bo'lishi mumkin.\n\n{e}", reply_markup=admin_kb(message.from_user.id))
 
-# --- ADMINGA MUROJAAT VA LİMİT TIZIMI ---
-
+# ==================== ADMINGA MUROJAAT VA LIMIT ====================
 @bot.message_handler(func=lambda m: m.text == "✍️ Adminga murojaat")
 def support_start(message):
     u_id = message.from_user.id
     conn, cursor = get_db()
-
-    # Limitni tekshirish
     now = datetime.datetime.now()
     user_limit = cursor.execute("SELECT last_reset, msg_count FROM support_limits WHERE user_id = ?", (u_id,)).fetchone()
-
+    msg_count = 0
+    last_reset = None
     if user_limit:
-        last_reset = datetime.datetime.strptime(user_limit[0], '%Y-%m-%d %H:%M:%S')
-        msg_count = user_limit[1] if user_limit[1] is not None else 0
-
-        # Agar 1 soat o'tgan bo'lsa, limitni yangilaymiz
-        if (now - last_reset).total_seconds() > 3600:
-            cursor.execute("UPDATE support_limits SET last_reset = ?, msg_count = 0 WHERE user_id = ?",
-                           (now.strftime('%Y-%m-%d %H:%M:%S'), u_id))
-            conn.commit()
-            msg_count = 0
-
-    if (msg_count or 0) >= 5:
-            diff = 3600 - (now - last_reset).total_seconds()
-            minutes = int(diff // 60)
-            return bot.send_message(message.chat.id, f"⚠️ <b>Limitga yetdingiz!</b>\n\nSiz 1 soatda faqat 5 ta xabar yubora olasiz. Yana {minutes} daqiqadan so'ng yozishingiz mumkin.")
-
+        last_reset_str, msg_count = user_limit
+        if last_reset_str:
+            last_reset = datetime.datetime.strptime(last_reset_str, '%Y-%m-%d %H:%M:%S')
+            if (now - last_reset).total_seconds() > 3600:
+                cursor.execute("UPDATE support_limits SET last_reset = ?, msg_count = 0 WHERE user_id = ?",
+                               (now.strftime('%Y-%m-%d %H:%M:%S'), u_id))
+                conn.commit()
+                msg_count = 0
+                last_reset = now
+    if msg_count >= 5:
+        diff = 3600 - (now - last_reset).total_seconds() if last_reset else 3600
+        minutes = int(diff // 60)
+        return bot.send_message(message.chat.id, f"⚠️ <b>Limitga yetdingiz!</b>\n\nSiz 1 soatda faqat 5 ta xabar yubora olasiz. Yana {minutes} daqiqadan so'ng yozishingiz mumkin.")
     msg = bot.send_message(message.chat.id, "📝 <b>Adminga yubormoqchi bo'lgan xabaringizni yozing:</b>\n(Xabaringiz to'g'ridan-to'g'ri adminga boradi)", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, send_to_admin)
 
 def send_to_admin(message):
     if message.text == "🚫 Bekor qilish":
         return bot.send_message(message.chat.id, "Bekor qilindi.", reply_markup=main_kb(message.from_user.id))
-
     u_id = message.from_user.id
     conn, cursor = get_db()
     now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-  # Bazadagi limitni oshirish (To'g'rilangan variant)
     cursor.execute("""
         INSERT INTO support_limits (user_id, last_reset, msg_count)
         VALUES (?, ?, 1)
         ON CONFLICT(user_id) DO UPDATE SET
-        msg_count = IFNULL(msg_count, 0) + 1,
+        msg_count = COALESCE(msg_count, 0) + 1,
         last_reset = excluded.last_reset
     """, (u_id, now))
-
-    # Agar bu birinchi xabar bo'lsa vaqtni to'g'rilash:
-    cursor.execute("UPDATE support_limits SET last_reset = (SELECT last_reset FROM support_limits WHERE user_id = ?) WHERE user_id = ? AND msg_count = 1", (u_id, u_id))
     conn.commit()
-
-    # Adminga yuborish
     admin_text = f"📩 <b>Yangi murojaat!</b>\n\n<b>Kimdan:</b> <a href='tg://user?id={u_id}'>{message.from_user.first_name}</a>\n<b>ID:</b> <code>{u_id}</code>\n\n<b>Xabar:</b> {message.text}"
-
-    # Adminga yuborish (va boshqa adminlar bo'lsa ularga ham)
+    # Barcha adminlarga yuborish (super admin va boshqalar)
     bot.send_message(ADMIN_ID, admin_text, parse_mode='HTML')
-
+    # Agar boshqa adminlar bo'lsa, ularga ham yuborish
+    conn, cursor = get_db()
+    admins = cursor.execute("SELECT user_id FROM admins WHERE user_id != ?", (ADMIN_ID,)).fetchall()
+    for a in admins:
+        try:
+            bot.send_message(a[0], admin_text, parse_mode='HTML')
+        except:
+            pass
     bot.send_message(message.chat.id, "✅ <b>Xabaringiz adminga yuborildi!</b>\nTez orada javob qaytaramiz.", reply_markup=main_kb(u_id))
     print(f"📩 MUROJAAT: {u_id} dan xabar keldi.")
-    # 13. ZAYAVKA KELGANDA UNI BAZAGA SAQLASH
-@bot.chat_join_request_handler()
-def handle_join_request(chat_join_request):
-    u_id = chat_join_request.from_user.id
-    conn, cursor = get_db()
-    # Foydalanuvchi zayavka tashlaganini requests jadvaliga yozib qo'yamiz
-    cursor.execute("INSERT OR IGNORE INTO requests (user_id) VALUES (?)", (u_id,))
-    conn.commit()
-    print(f"📩 ZAYAVKA: {u_id} kanalga so'rov yubordi va bazaga yozildi.")
 
 # ==================== FLASK SERVER ====================
-from flask import Flask
-from threading import Thread
+app = Flask(__name__)
 
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
+@app.route('/')
 def home():
     return "Bot ishlamoqda!"
 
 def run_flask():
-    flask_app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8080)
 
 # ==================== BOTNI ISHGA TUSHIRISH ====================
 if __name__ == "__main__":
-    # Flask serverini alohida thread'da ishga tushirish
     Thread(target=run_flask).start()
-    
     print("🚀 Bot muvaffaqiyatli ishga tushdi...")
     try:
         bot.infinity_polling(allowed_updates=["message", "callback_query", "chat_join_request"])
