@@ -3,7 +3,7 @@ import sqlite3
 from telebot import types
 
 # 1. SOZLAMALAR
-BOT_TOKEN = "8463516034:AAF0S0e8_6M8XhlmqFTpmrbOcIddOxh19i0"
+BOT_TOKEN = os.getenv('8463516034:AAFCzKb7USbIDfG6Tm7LCHbK7NU8EoBQ8kM')
 ADMIN_ID = 7878240647
 BOT_USERNAME = "Anishadowmythicbot"
 
