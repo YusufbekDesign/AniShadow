@@ -100,6 +100,18 @@ def check_subscription(message):
 
 def get_admin_perms(user_id):
     """Foydalanuvchining admin ruxsatlarini qaytaradi (lug'at)"""
+    # Super admin (ADMIN_ID) uchun barcha ruxsatlar 1
+    if user_id == ADMIN_ID:
+        return {
+            'add_anime': 1,
+            'add_episode': 1,
+            'delete_anime': 1,
+            'delete_episode': 1,
+            'premium': 1,
+            'broadcast': 1,
+            'view_stats': 1,
+            'write_user': 1
+        }
     conn, cursor = get_db()
     row = cursor.execute('''SELECT can_add_anime, can_add_episode, can_delete_anime,
                             can_delete_episode, can_premium, can_broadcast,
@@ -264,6 +276,9 @@ def open_admin(message):
     bot.send_message(message.chat.id, "👨‍💻 Admin panelga xush kelibsiz:", reply_markup=admin_kb(message.from_user.id))
 
 # ==================== ADMIN BOSHQARUVI (faqat super admin) ====================
+add_temp = {}
+edit_temp = {}
+
 @bot.message_handler(func=lambda m: m.text == "👥 Admin boshqaruvi" and m.from_user.id == ADMIN_ID)
 def manage_admins(message):
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -576,7 +591,9 @@ def send_broadcast(message):
 @bot.message_handler(func=lambda m: m.text == "➕ Anime yuklash")
 def add_step_1(message):
     perms = get_admin_perms(message.from_user.id)
+    print(f"DEBUG: user={message.from_user.id}, perms={perms}")   # terminalda chiqadi
     if not perms or not perms['add_anime']:
+        print("DEBUG: ruxsat yo‘q, funksiya to‘xtadi")
         return
     msg = bot.send_message(message.chat.id, "<b>1. Anime uchun POSTER (rasm) yuboring:</b>", reply_markup=cancel_kb())
     bot.register_next_step_handler(msg, add_step_2)
