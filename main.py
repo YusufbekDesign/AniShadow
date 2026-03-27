@@ -495,8 +495,7 @@ def edit_toggle_callback(call):
             types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="edit_cancel")
         )
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
-    else:
-        bot.answer_callback_query(call.id, "Xatolik")
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('edit_save_') and call.from_user.id == ADMIN_ID)
 def edit_save_callback(call):
