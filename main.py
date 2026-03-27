@@ -70,32 +70,9 @@ init_db()
 
 # ==================== YORDAMCHI FUNKSIYALAR ====================
 def is_subscribed(user_id):
-    if str(user_id) == str(ADMIN_ID):
-        return True
-    try:
-        status = bot.get_chat_member(KANAL_ID, user_id).status
-        if status in ['member', 'administrator', 'creator']:
-            return True
-    except:
-        pass
-    conn, cursor = get_db()
-    cursor.execute("SELECT user_id FROM requests WHERE user_id = ?", (user_id,))
-    if cursor.fetchone():
-        return True
-    return False
+    return True  # Har doim ruxsat berish
 
 def check_subscription(message):
-    user_id = message.from_user.id
-    if not is_subscribed(user_id):
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🔗 Kanala qo'shilish", url=ZAYAVKA_LINK))
-        markup.add(types.InlineKeyboardButton("✅ Tekshirish", callback_data="check_subs"))
-        bot.send_message(message.chat.id,
-                         "🚫 Botdan foydalanish uchun avval kanalimizga qo'shilishingiz kerak.\n\n"
-                         "🔹 Kanal: @AniShadowMythic\n"
-                         "🔹 Quyidagi tugma orqali so'rov yuboring va 'Tekshirish' tugmasini bosing.",
-                         reply_markup=markup)
-        return False
     return True
 
 def get_admin_perms(user_id):
@@ -180,26 +157,25 @@ def admin_kb(user_id):
     perms = get_admin_perms(user_id)
     if perms is None:
         return types.ReplyKeyboardMarkup(resize_keyboard=True).add("🏠 Bosh menyu")
+    
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    if perms['add_anime']:
-        kb.add("➕ Anime yuklash")
-    if perms['add_episode']:
-        kb.add("🎬 Qism qo'shish")
-    if perms['view_stats']:
-        kb.add("📊 Statistika")
-    if perms['broadcast']:
-        kb.add("📢 Reklama yuborish")
-    if perms['delete_anime']:
-        kb.add("🗑 Anime o'chirish")
-    if perms['delete_episode']:
-        kb.add("🎬 Qismni o'chirish")
-    if perms['premium']:
-        kb.add("💎 Premium Sozlamalari")
-    if perms['write_user']:
-        kb.add("📩 Foydalanuvchiga yozish")
+    buttons = []
+    
+    if perms['add_anime']: buttons.append("➕ Anime yuklash")
+    if perms['add_episode']: buttons.append("🎬 Qism qo'shish")
+    if perms['view_stats']: buttons.append("📊 Statistika")
+    if perms['broadcast']: buttons.append("📢 Reklama yuborish")
+    if perms['delete_anime']: buttons.append("🗑 Anime o'chirish")
+    if perms['delete_episode']: buttons.append("🎬 Qismni o'chirish")
+    if perms['premium']: buttons.append("💎 Premium Sozlamalari")
+    if perms['write_user']: buttons.append("📩 Foydalanuvchiga yozish")
+    
+    kb.add(*buttons) # Barcha tugmalarni 2 tadan qilib joylaydi
+    
     if user_id == ADMIN_ID:
-        kb.add("👥 Admin boshqaruvi")
-    kb.add("🏠 Bosh menyu")
+        kb.row("👥 Admin boshqaruvi")
+    
+    kb.row("🏠 Bosh menyu")
     return kb
 
 def cancel_kb():
@@ -311,7 +287,7 @@ def add_admin_get_id(message):
     }
     show_add_perms(message.chat.id, target_id)
 
-def show_add_perms(chat_id, target_id):
+def show_add_perms(chat_id, target_id, message_id=None):
     perms = add_temp[target_id]
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -326,15 +302,25 @@ def show_add_perms(chat_id, target_id):
         types.InlineKeyboardButton("💾 Saqlash", callback_data=f"add_save_{target_id}"),
         types.InlineKeyboardButton("🚫 Bekor qilish", callback_data="add_cancel")
     )
-    bot.send_message(chat_id, f"👤 ID: {target_id} uchun ruxsatlarni belgilang:", reply_markup=markup)
+    if message_id:
+        bot.edit_message_reply_markup(chat_id, message_id, reply_markup=markup)
+    else:
+        bot.send_message(chat_id, f"👤 ID: {target_id} uchun ruxsatlarni belgilang:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('add_toggle_') and call.from_user.id == ADMIN_ID)
 def add_toggle_callback(call):
-    _, _, perm_key, target_id_str = call.data.split('_')
-    target_id = int(target_id_str)
+    # Kichik hiyla: So'zlarni to'g'ri ajratib olamiz
+    parts = call.data.split('_')
+    target_id = int(parts[-1])
+    perm_key = "_".join(parts[2:-1])
+
     if target_id in add_temp:
+        # ✅ ni ❌ ga, ❌ ni ✅ ga o'zgartiradi
         add_temp[target_id][perm_key] = 1 - add_temp[target_id][perm_key]
-        bot.answer_callback_query(call.id, f"{perm_key}: {'✅' if add_temp[target_id][perm_key] else '❌'}", show_alert=False)
+        bot.answer_callback_query(call.id, f"O'zgartirildi", show_alert=False)
+        show_add_perms(call.message.chat.id, target_id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "Xatolik! Bekor qilib qaytadan urinib ko'ring.")
         # Tugma matnini yangilash
         perms = add_temp[target_id]
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -465,7 +451,6 @@ def edit_admin_start(call):
         'write_user': row[7]
     }
     show_edit_perms(call.message.chat.id, target_id, call.message.message_id)
-
 def show_edit_perms(chat_id, target_id, message_id):
     perms = edit_temp[target_id]
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -485,11 +470,16 @@ def show_edit_perms(chat_id, target_id, message_id):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('edit_toggle_') and call.from_user.id == ADMIN_ID)
 def edit_toggle_callback(call):
-    _, _, perm_key, target_id_str = call.data.split('_')
-    target_id = int(target_id_str)
+    parts = call.data.split('_')
+    target_id = int(parts[-1])
+    perm_key = "_".join(parts[2:-1]) 
+
     if target_id in edit_temp:
         edit_temp[target_id][perm_key] = 1 - edit_temp[target_id][perm_key]
-        bot.answer_callback_query(call.id, f"{perm_key}: {'✅' if edit_temp[target_id][perm_key] else '❌'}", show_alert=False)
+        bot.answer_callback_query(call.id, "O'zgartirildi", show_alert=False)
+        show_edit_perms(call.message.chat.id, target_id, call.message.message_id)
+    else:
+        bot.answer_callback_query(call.id, "Sessiya tugagan. Qaytadan tahrirlang.")
         # Tugmalarni yangilash
         perms = edit_temp[target_id]
         markup = types.InlineKeyboardMarkup(row_width=2)
