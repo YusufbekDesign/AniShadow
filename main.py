@@ -309,7 +309,6 @@ def show_add_perms(chat_id, target_id, message_id=None):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('add_toggle_') and call.from_user.id == ADMIN_ID)
 def add_toggle_callback(call):
-    # Kichik hiyla: So'zlarni to'g'ri ajratib olamiz
     parts = call.data.split('_')
     target_id = int(parts[-1])
     perm_key = "_".join(parts[2:-1])
@@ -317,10 +316,11 @@ def add_toggle_callback(call):
     if target_id in add_temp:
         # ✅ ni ❌ ga, ❌ ni ✅ ga o'zgartiradi
         add_temp[target_id][perm_key] = 1 - add_temp[target_id][perm_key]
-        bot.answer_callback_query(call.id, f"O'zgartirildi", show_alert=False)
+        bot.answer_callback_query(call.id, "O'zgartirildi")
+        # Menyu qayta chiziladi
         show_add_perms(call.message.chat.id, target_id, call.message.message_id)
     else:
-        bot.answer_callback_query(call.id, "Xatolik! Bekor qilib qaytadan urinib ko'ring.")
+        bot.answer_callback_query(call.id, "Xatolik! Sessiya muddati o'tgan.", show_alert=True)
         # Tugma matnini yangilash
         perms = add_temp[target_id]
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -476,10 +476,10 @@ def edit_toggle_callback(call):
 
     if target_id in edit_temp:
         edit_temp[target_id][perm_key] = 1 - edit_temp[target_id][perm_key]
-        bot.answer_callback_query(call.id, "O'zgartirildi", show_alert=False)
+        bot.answer_callback_query(call.id, "O'zgartirildi")
         show_edit_perms(call.message.chat.id, target_id, call.message.message_id)
     else:
-        bot.answer_callback_query(call.id, "Sessiya tugagan. Qaytadan tahrirlang.")
+        bot.answer_callback_query(call.id, "Sessiya tugagan. Qaytadan urinib ko'ring.", show_alert=True)
         # Tugmalarni yangilash
         perms = edit_temp[target_id]
         markup = types.InlineKeyboardMarkup(row_width=2)
