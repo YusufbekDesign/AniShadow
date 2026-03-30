@@ -19,6 +19,28 @@ ZAYAVKA_LINK = "https://t.me/+O08QOzg7QSo1YzEy"
 # Botni aniqlash
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
+# msg
+@bot.message_handler(commands=['msg'])
+def test_msg(message):
+    # Faqat siz ishlata olasiz
+    if message.from_user.id != 7878240647:
+        return
+
+    try:
+        # /msg 123456 Salom
+        tekst = message.text.split(maxsplit=2)
+        if len(tekst) < 3:
+            bot.reply_to(message, "Xato! Ishlatish: /msg ID MATN")
+            return
+
+        kimga = tekst[1]
+        nima = tekst[2]
+
+        bot.send_message(kimga, f"📩 <b>Admin xabari:</b>\n\n{nima}")
+        bot.reply_to(message, "✅ Xabar ketdi!")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Xato chiqdi: {e}")
+        
 # ==================== BAZA ====================
 def get_db():
     conn = sqlite3.connect('anishadow_final.db', check_same_thread=False)
@@ -245,32 +267,7 @@ Men siz qidirayotgan barcha Animelarni topishga yordam beraman. Buning uchun Ani
 
 ✅ <i>Tushungan bo'lsangiz, Anime kodini yuboring!</i>"""
     bot.send_message(message.chat.id, text, reply_markup=main_kb(u_id))
-# ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
-@bot.message_handler(commands=['msg'])
-def fast_msg_handler(message):
-    # Faqat Super Admin yoki ruxsati bor adminlar uchun
-    user_id = message.from_user.id
-    perms = get_admin_perms(user_id)
-    
-    if user_id != ADMIN_ID and (not perms or not perms.get('write_user')):
-        return # Ruxsatsizlarga javob bermaydi
 
-    try:
-        # Format: /msg 1234567 Salom
-        parts = message.text.split(maxsplit=2)
-        
-        if len(parts) < 3:
-            bot.reply_to(message, "⚠️ <b>Xato format!</b>\n\nIshlatish: <code>/msg ID XABAR</code>")
-            return
-
-        target_id = parts[1].strip()
-        text = parts[2].strip()
-
-        bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{text}")
-        bot.reply_to(message, f"✅ <b>Yuborildi!</b>\n🆔 ID: <code>{target_id}</code>")
-
-    except Exception as e:
-        bot.reply_to(message, f"❌ <b>Xatolik:</b> Foydalanuvchi botni bloklagan yoki ID noto'g'ri.")
         
 
 
