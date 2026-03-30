@@ -189,11 +189,14 @@ def admin_kb(user_id):
     if perms is None:
         return types.ReplyKeyboardMarkup(resize_keyboard=True).add("🏠 Bosh menyu")
     
+    # row_width=2 tugmalarni 2 tadan qilib taxlaydi
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = []
     
     if perms['add_anime']: buttons.append("➕ Anime yuklash")
-    if perms['add_episode']: buttons.append("🎬 Qism qo'shish")
+    if perms['add_episode']: 
+        buttons.append("🎬 Qism qo'shish")
+        buttons.append("⚡️ Tezkor yuklash") # Yangi tugma
     if perms['view_stats']: buttons.append("📊 Statistika")
     if perms['broadcast']: buttons.append("📢 Reklama yuborish")
     if perms['delete_anime']: buttons.append("🗑 Anime o'chirish")
@@ -201,13 +204,16 @@ def admin_kb(user_id):
     if perms['premium']: buttons.append("💎 Premium Sozlamalari")
     if perms['write_user']: buttons.append("📩 Foydalanuvchiga yozish")
     
-    kb.add(*buttons) # Barcha tugmalarni 2 tadan qilib joylaydi
+    # Mana shu joyi barcha tugmalarni 2 tadan qilib qo'shadi
+    kb.add(*buttons) 
     
     if user_id == ADMIN_ID:
         kb.row("👥 Admin boshqaruvi")
     
     kb.row("🏠 Bosh menyu")
     return kb
+    
+    
 
 def cancel_kb():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -1041,6 +1047,53 @@ def send_to_admin(message):
     bot.send_message(message.chat.id, "✅ <b>Xabaringiz adminga yuborildi!</b>\nTez orada javob qaytaramiz.", reply_markup=main_kb(u_id))
     print(f"📩 MUROJAAT: {u_id} dan xabar keldi.")
 
+# ==================== TEZKOR QISM QO'SHISH LOGIKASI ====================
+bulk_upload_data = {}
+
+@bot.message_handler(func=lambda m: m.text == "⚡️ Tezkor yuklash")
+def bulk_start(message):
+    if not is_admin(message.from_user.id): return
+    msg = bot.send_message(message.chat.id, "🎬 <b>Anime kodini yuboring:</b>", parse_mode="HTML", reply_markup=cancel_kb())
+    bot.register_next_step_handler(msg, bulk_get_code)
+
+def bulk_get_code(message):
+    if message.text == "🚫 Bekor qilish":
+        return bot.send_message(message.chat.id, "Bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
+    anime_code = message.text
+    msg = bot.send_message(message.chat.id, f"📌 <b>[{anime_code}]</b> uchun nechanchi qismdan boshlaymiz? (Masalan: 1):", parse_mode="HTML")
+    bot.register_next_step_handler(msg, bulk_get_start_ep, anime_code)
+
+def bulk_get_start_ep(message, anime_code):
+    try:
+        start_ep = int(message.text)
+        bulk_upload_data[message.from_user.id] = {'code': anime_code, 'next_ep': start_ep}
+        msg = bot.send_message(message.chat.id, f"✅ Tayyor! Endi qismlarni ketma-ket yuboring.\nTo'xtatish uchun: <b>/stop</b>", parse_mode="HTML")
+        bot.register_next_step_handler(msg, bulk_save_loop)
+    except:
+        bot.send_message(message.chat.id, "Faqat raqam yozing!")
+
+def bulk_save_loop(message):
+    user_id = message.from_user.id
+    if message.text == "/stop":
+        bulk_upload_data.pop(user_id, None)
+        return bot.send_message(message.chat.id, "🛑 Tugatildi.", reply_markup=admin_kb(user_id))
+
+    if not message.video:
+        msg = bot.send_message(message.chat.id, "⚠️ Video yuboring yoki /stop bosing.")
+        bot.register_next_step_handler(msg, bulk_save_loop)
+        return
+
+    data = bulk_upload_data.get(user_id)
+    anime_code, ep_num = data['code'], data['next_ep']
+
+    conn, cursor = get_db()
+    cursor.execute("INSERT INTO episodes (anime_code, ep_num, video_id) VALUES (?, ?, ?)", (anime_code, ep_num, message.video.file_id))
+    conn.commit()
+
+    bulk_upload_data[user_id]['next_ep'] += 1
+    msg = bot.reply_to(message, f"✅ {ep_num}-qism saqlandi! Keyingisini yuboring...")
+    bot.register_next_step_handler(msg, bulk_save_loop)
+    
 # ==================== FLASK SERVER ====================
 app = Flask(__name__)
 
