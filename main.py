@@ -245,6 +245,28 @@ Men siz qidirayotgan barcha Animelarni topishga yordam beraman. Buning uchun Ani
 
 ✅ <i>Tushungan bo'lsangiz, Anime kodini yuboring!</i>"""
     bot.send_message(message.chat.id, text, reply_markup=main_kb(u_id))
+# ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
+@bot.message_handler(commands=['msg'])
+def send_user_message(message):
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['write_user']:
+        return bot.reply_to(message, "❌ Sizda foydalanuvchilarga yozish ruxsati yo'q.")
+
+    try:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 3:
+            return bot.reply_to(message, "⚠️ Format: <code>/msg ID xabar</code>")
+
+        target_id = int(parts[1])
+        user_msg = parts[2]
+
+        bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{user_msg}")
+        bot.reply_to(message, f"✅ Xabar (ID: {target_id}) ga yuborildi!")
+    except ValueError:
+        bot.reply_to(message, "❌ ID faqat raqam bo'lishi kerak!")
+    except Exception as e:
+        bot.reply_to(message, "❌ Yuborib bo'lmadi (Bot bloklangan bo'lishi mumkin).")
+
 
 # ==================== ADMIN PANEL ====================
 @bot.message_handler(func=lambda m: m.text == "⚙️ Admin Panel" and is_admin(m.from_user.id))
