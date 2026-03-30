@@ -19,28 +19,37 @@ ZAYAVKA_LINK = "https://t.me/+O08QOzg7QSo1YzEy"
 # Botni aniqlash
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-# msg
+# ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
 @bot.message_handler(commands=['msg'])
 def test_msg(message):
-    # Faqat siz ishlata olasiz
-    if message.from_user.id != 7878240647:
+    # 1. Admin ekanligingizni tekshirish
+    if message.from_user.id != ADMIN_ID:
+        # Agar admin bo'lmasangiz, bot senga javob qaytaradi (tekshirish uchun)
+        bot.reply_to(message, f"Siz admin emassiz! Sizning ID: {message.from_user.id}")
         return
 
     try:
-        # /msg 123456 Salom
-        tekst = message.text.split(maxsplit=2)
-        if len(tekst) < 3:
-            bot.reply_to(message, "Xato! Ishlatish: /msg ID MATN")
+        # 2. Buyruqni qismlarga bo'lish
+        parts = message.text.split(maxsplit=2)
+        
+        if len(parts) < 3:
+            bot.reply_to(message, "⚠️ <b>Xato!</b>\nIshlatish: <code>/msg ID MATN</code>\n\nMisol: <code>/msg 7878240647 Salom do'stim</code>")
             return
 
-        kimga = tekst[1]
-        nima = tekst[2]
+        target_id = parts[1].strip()
+        msg_text = parts[2].strip()
 
-        bot.send_message(kimga, f"📩 <b>Admin xabari:</b>\n\n{nima}")
-        bot.reply_to(message, "✅ Xabar ketdi!")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Xato chiqdi: {e}")
+        # 3. Xabarni yuborish
+        bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{msg_text}", parse_mode='HTML')
         
+        # 4. Senga tasdiq yuborish
+        bot.reply_to(message, f"✅ Xabar yuborildi!\n🆔 ID: {target_id}")
+
+    except Exception as e:
+        # Agar biror xato bo'lsa, senga xabar beradi
+        bot.reply_to(message, f"❌ <b>Xatolik yuz berdi:</b>\n<code>{e}</code>")
+        
+
 # ==================== BAZA ====================
 def get_db():
     conn = sqlite3.connect('anishadow_final.db', check_same_thread=False)
