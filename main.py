@@ -247,25 +247,31 @@ Men siz qidirayotgan barcha Animelarni topishga yordam beraman. Buning uchun Ani
     bot.send_message(message.chat.id, text, reply_markup=main_kb(u_id))
 # ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
 @bot.message_handler(commands=['msg'])
-def send_user_message(message):
-    perms = get_admin_perms(message.from_user.id)
-    if not perms or not perms['write_user']:
-        return bot.reply_to(message, "❌ Sizda foydalanuvchilarga yozish ruxsati yo'q.")
+def fast_msg_handler(message):
+    # Faqat Super Admin yoki ruxsati bor adminlar uchun
+    user_id = message.from_user.id
+    perms = get_admin_perms(user_id)
+    
+    if user_id != ADMIN_ID and (not perms or not perms.get('write_user')):
+        return # Ruxsatsizlarga javob bermaydi
 
     try:
+        # Format: /msg 1234567 Salom
         parts = message.text.split(maxsplit=2)
+        
         if len(parts) < 3:
-            return bot.reply_to(message, "⚠️ Format: <code>/msg ID xabar</code>")
+            bot.reply_to(message, "⚠️ <b>Xato format!</b>\n\nIshlatish: <code>/msg ID XABAR</code>")
+            return
 
-        target_id = int(parts[1])
-        user_msg = parts[2]
+        target_id = parts[1].strip()
+        text = parts[2].strip()
 
-        bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{user_msg}")
-        bot.reply_to(message, f"✅ Xabar (ID: {target_id}) ga yuborildi!")
-    except ValueError:
-        bot.reply_to(message, "❌ ID faqat raqam bo'lishi kerak!")
+        bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{text}")
+        bot.reply_to(message, f"✅ <b>Yuborildi!</b>\n🆔 ID: <code>{target_id}</code>")
+
     except Exception as e:
-        bot.reply_to(message, "❌ Yuborib bo'lmadi (Bot bloklangan bo'lishi mumkin).")
+        bot.reply_to(message, f"❌ <b>Xatolik:</b> Foydalanuvchi botni bloklagan yoki ID noto'g'ri.")
+        
 
 
 # ==================== ADMIN PANEL ====================
