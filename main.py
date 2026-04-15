@@ -1157,42 +1157,50 @@ def bulk_save_loop(message):
     user_id = message.from_user.id
     if message.text == "/stop":
         bulk_upload_data.pop(user_id, None)
-        return bot.send_message(message.chat.id, "🛑 Tugatildi.", reply_markup=admin_kb(user_id))
+        return bot.send_message(message.chat.id, "🛑 Yuklash to'xtatildi.", reply_markup=admin_kb(user_id))
 
     if not message.video:
-        msg = bot.send_message(message.chat.id, "⚠️ Video yuboring yoki /stop bosing.")
+        msg = bot.send_message(message.chat.id, "⚠️ Iltimos, video yuboring yoki to'xtatish uchun /stop bosing.")
         bot.register_next_step_handler(msg, bulk_save_loop)
         return
 
     data = bulk_upload_data.get(user_id)
-    anime_code, ep_num, mode = data['code'], data['next_ep'], data['mode']
+    if not data:
+        return
+
+    anime_code = data['code']
+    ep_num = data['next_ep']
+    mode = data.get('mode', 'single')
 
     conn, cursor = get_db()
-    cursor.execute("INSERT INTO episodes (anime_code, ep_num, video_id) VALUES (?, ?, ?)", (anime_code, ep_num, message.video.file_id))
+    
+    # --- DUBLIKAT TEKSHIRUVI ---
+    cursor.execute("SELECT 1 FROM episodes WHERE anime_code = ? AND ep_num = ?", (anime_code, ep_num))
+    if cursor.fetchone():
+        conn.close()
+        # Agar qism bo'lsa, raqamni bittaga oshirib keyingisini so'raymiz
+        bulk_upload_data[user_id]['next_ep'] += 1
+        new_ep = bulk_upload_data[user_id]['next_ep']
+        msg = bot.send_message(message.chat.id, f"⚠️ {ep_num}-qism bazada bor! Endi {new_ep}-qism videosini yuboring:")
+        bot.register_next_step_handler(msg, bulk_save_loop)
+        return 
+    # ---------------------------
+
+    # Bazaga saqlash
+    cursor.execute("INSERT INTO episodes (anime_code, ep_num, video_id) VALUES (?, ?, ?)", 
+                   (anime_code, ep_num, message.video.file_id))
     conn.commit()
     conn.close()
 
+    # Raqamni oshirish
     bulk_upload_data[user_id]['next_ep'] += 1
-    
+    next_ep_num = bulk_upload_data[user_id]['next_ep']
+
     if mode == 'single':
-        # Har biriga reply qaytaradi
-        msg = bot.reply_to(message, f"✅ {ep_num}-qism saqlandi! Keyingisini yuboring...")
+        msg = bot.reply_to(message, f"✅ {ep_num}-qism saqlandi! Endi {next_ep_num}-qismni yuboring (To'xtatish uchun /stop):")
     else:
-        # Faqat kichik xabar (reaksiya o'rnida)
-        msg = bot.send_message(message.chat.id, f"📥 {ep_num}-qism kiritildi...")
+        msg = bot.send_message(message.chat.id, f"📥 {ep_num}-qism kiritildi. Keyingisini kutaman...")
     
-    bot.register_next_step_handler(msg, bulk_save_loop)
-        return
-
-    data = bulk_upload_data.get(user_id)
-    anime_code, ep_num = data['code'], data['next_ep']
-
-    conn, cursor = get_db()
-    cursor.execute("INSERT INTO episodes (anime_code, ep_num, video_id) VALUES (?, ?, ?)", (anime_code, ep_num, message.video.file_id))
-    conn.commit()
-
-    bulk_upload_data[user_id]['next_ep'] += 1
-    msg = bot.reply_to(message, f"✅ {ep_num}-qism saqlandi! Keyingisini yuboring...")
     bot.register_next_step_handler(msg, bulk_save_loop)
     
 # ==================== FLASK SERVER ====================
