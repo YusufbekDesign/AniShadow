@@ -22,10 +22,10 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 # ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
 @bot.message_handler(commands=['msg'])
 def test_msg(message):
-    # 1. Admin ekanligingizni tekshirish
-    if message.from_user.id != ADMIN_ID:
-        # Agar admin bo'lmasangiz, bot senga javob qaytaradi (tekshirish uchun)
-        bot.reply_to(message, f"Siz admin emassiz! Sizning ID: {message.from_user.id}")
+  # 1. Admin ekanligini va foydalanuvchiga yozish ruxsati borligini tekshirish
+    perms = get_admin_perms(message.from_user.id)
+    if not perms or not perms['write_user']:
+        bot.reply_to(message, f"Sizda bu buyruqni ishlatish uchun ruxsat yo'q! ID: {message.from_user.id}")
         return
 
     try:
@@ -578,10 +578,10 @@ def show_stats(message):
     total_animes = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
     last_users = cursor.execute("SELECT user_id, username FROM users ORDER BY rowid DESC LIMIT 10").fetchall()
     u_text = ""
-    for u in last_users:
+   for u in last_users:
         user_link = f'<a href="tg://user?id={u[0]}">{u[0]}</a>'
-        username = f"@{u[1]}" if u[1] and u[1] != "yo'q" else "username yo'q"
-        u_text += f"👤 {user_link} | {username}\n"
+        # Faqat ID raqamini havola qilib chiqaramiz, username shart emas
+        u_text += f"👤 ID: {user_link}\n"
     top_animes = cursor.execute("SELECT title, views FROM animes ORDER BY views DESC LIMIT 5").fetchall()
     a_text = ""
     for a in top_animes:
@@ -950,8 +950,8 @@ def send_user_list_page(chat_id, offset, user_id, message_id=None):
         return bot.send_message(chat_id, "❌ Bazada foydalanuvchilar topilmadi.")
     markup = types.InlineKeyboardMarkup(row_width=1)
     for u in users:
-        name = f"@{u[1]}" if u[1] else f"ID: {u[0]}"
-        markup.add(types.InlineKeyboardButton(f"👤 {name}", callback_data=f"msguser_{u[0]}"))
+        # Username qanaqa bo'lishidan qat'i nazar, faqat ID ni tugmada ko'rsatamiz
+        markup.add(types.InlineKeyboardButton(f"👤 ID: {u[0]}", callback_data=f"msguser_{u[0]}"))
     nav_btns = []
     if offset > 0:
         nav_btns.append(types.InlineKeyboardButton("⬅️ Orqaga", callback_data=f"usrs_{offset-10}"))
