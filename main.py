@@ -249,9 +249,7 @@ def guide(message):
     bot.send_message(message.chat.id, text)
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Anime izlash")
-def search_handler(message):
-    if not check_subscription(message): return
-    
+def search_menu(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("🔢 Kod orqali", callback_data="search_code"),
@@ -259,8 +257,8 @@ def search_handler(message):
     )
     markup.add(types.InlineKeyboardButton("🎭 Janrlar", callback_data="search_genre"))
     markup.add(
-        types.InlineKeyboardButton("🆕 Yangilar", callback_data="search_new"),
-        types.InlineKeyboardButton("🔥 Top", callback_data="search_top")
+        types.InlineKeyboardButton("🆕 Yangi yuklanganlar", callback_data="search_new"),
+        types.InlineKeyboardButton("🔥 Top animelar", callback_data="search_top")
     )
     bot.send_message(message.chat.id, "👇 Qidiruv turini tanlang:", reply_markup=markup)
 
@@ -1084,9 +1082,42 @@ def bulk_start(message):
 def bulk_get_code(message):
     if message.text == "🚫 Bekor qilish":
         return bot.send_message(message.chat.id, "Bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
+    
     anime_code = message.text
-    msg = bot.send_message(message.chat.id, f"📌 <b>[{anime_code}]</b> uchun nechanchi qismdan boshlaymiz? (Masalan: 1):", parse_mode="HTML")
-    bot.register_next_step_handler(msg, bulk_get_start_ep, anime_code)
+    
+    # KODNI TEKSHIRISH (Dublikat yoki borligini bilish uchun)
+    conn, cursor = get_db()
+    cursor.execute("SELECT title FROM animes WHERE code = ?", (anime_code,))
+    anime = cursor.fetchone()
+    conn.close()
+
+    if not anime:
+        return bot.send_message(message.chat.id, f"❌ <b>{anime_code}</b> kodli anime topilmadi! Avval animeni qo'shing.")
+
+    # REJIM TANLASH TUGMALARI
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("1️⃣ Bittalab", callback_data=f"bmode_single_{anime_code}"),
+        types.InlineKeyboardButton("🔢 Hammasini birdan", callback_data=f"bmode_multi_{anime_code}")
+    )
+    bot.send_message(message.chat.id, f"🎬 Anime: <b>{anime[0]}</b>\nYuklash turini tanlang:", reply_markup=markup, parse_mode="HTML")
+
+# Tanlangan rejimni tutib olib, nechanchi qismligini so'rash
+@bot.callback_query_handler(func=lambda call: call.data.startswith('bmode_'))
+def bulk_ask_ep_num(call):
+    _, mode, code = call.data.split('_')
+    msg = bot.send_message(call.message.chat.id, "🔢 Nechanchi qismdan boshlaymiz?")
+    bot.register_next_step_handler(msg, bulk_get_start_ep_new, code, mode)
+
+def bulk_get_start_ep_new(message, anime_code, mode):
+    try:
+        start_ep = int(message.text)
+        # Rejimni ham xotiraga saqlaymiz
+        bulk_upload_data[message.from_user.id] = {'code': anime_code, 'next_ep': start_ep, 'mode': mode}
+        msg = bot.send_message(message.chat.id, f"✅ Tayyor! Endi videolarni yuboring.\nRejim: {'Hammasini birdan' if mode == 'multi' else 'Bittalab'}\nTo'xtatish: <b>/stop</b>", parse_mode="HTML")
+        bot.register_next_step_handler(msg, bulk_save_loop)
+    except:
+        bot.send_message(message.chat.id, "Faqat raqam yozing!")
 
 def bulk_get_start_ep(message, anime_code):
     try:
@@ -1106,6 +1137,26 @@ def bulk_save_loop(message):
     if not message.video:
         msg = bot.send_message(message.chat.id, "⚠️ Video yuboring yoki /stop bosing.")
         bot.register_next_step_handler(msg, bulk_save_loop)
+        return
+
+    data = bulk_upload_data.get(user_id)
+    anime_code, ep_num, mode = data['code'], data['next_ep'], data['mode']
+
+    conn, cursor = get_db()
+    cursor.execute("INSERT INTO episodes (anime_code, ep_num, video_id) VALUES (?, ?, ?)", (anime_code, ep_num, message.video.file_id))
+    conn.commit()
+    conn.close()
+
+    bulk_upload_data[user_id]['next_ep'] += 1
+    
+    if mode == 'single':
+        # Har biriga reply qaytaradi
+        msg = bot.reply_to(message, f"✅ {ep_num}-qism saqlandi! Keyingisini yuboring...")
+    else:
+        # Faqat kichik xabar (reaksiya o'rnida)
+        msg = bot.send_message(message.chat.id, f"📥 {ep_num}-qism kiritildi...")
+    
+    bot.register_next_step_handler(msg, bulk_save_loop)
         return
 
     data = bulk_upload_data.get(user_id)
