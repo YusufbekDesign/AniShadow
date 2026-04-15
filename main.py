@@ -670,10 +670,22 @@ def add_step_3(message, photo_id):
 def add_step_final(message, photo_id, code):
     if message.text == "🚫 Bekor qilish":
         return bot.send_message(message.chat.id, "❌ Yuklash bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
+    
     title = message.text
     conn, cursor = get_db()
-    cursor.execute("INSERT OR REPLACE INTO animes (code, title, photo_id) VALUES (?, ?, ?)", (code, title, photo_id))
+    
+    # --- DUBLIKAT TEKSHIRUVI ---
+    cursor.execute("SELECT title FROM animes WHERE code = ?", (code,))
+    exists = cursor.fetchone()
+    if exists:
+        conn.close()
+        return bot.send_message(message.chat.id, f"❌ Xato! <b>{code}</b> kodi bazada bor: \"{exists[0]}\"\nBoshqa kod bilan qaytadan urinib ko'ring.", reply_markup=admin_kb(message.from_user.id))
+    # ---------------------------
+
+    # Endi REPLACE emas, faqat INSERT qilamiz (xavfsiz bo'lishi uchun)
+    cursor.execute("INSERT INTO animes (code, title, photo_id) VALUES (?, ?, ?)", (code, title, photo_id))
     conn.commit()
+    # Pastdagi admin xabar va h.k. qismlariga tegmang, ular qolsin
     # Super adminga xabar
     bot.send_message(ADMIN_ID, f"➕ <b>Yangi anime qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name} (ID: {message.from_user.id})\n<b>Nomi:</b> {title}\n<b>Kodi:</b> {code}", parse_mode='HTML')
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
@@ -717,13 +729,25 @@ def ep_step_3(message, code):
 def ep_step_final(message, code, num):
     if message.text == "🚫 Bekor qilish":
         return bot.send_message(message.chat.id, "❌ Qism qo'shish bekor qilindi.", reply_markup=admin_kb(message.from_user.id))
+    
     if message.content_type != 'video':
         msg = bot.send_message(message.chat.id, "❌ Faqat video yuboring! (Yoki bekor qiling):", reply_markup=cancel_kb())
         bot.register_next_step_handler(msg, ep_step_final, code, num)
         return
+
     conn, cursor = get_db()
+    
+    # --- QISM DUBLIKATINI TEKSHIRISH ---
+    cursor.execute("SELECT 1 FROM episodes WHERE anime_code = ? AND ep_num = ?", (code, int(num)))
+    if cursor.fetchone():
+        conn.close()
+        return bot.send_message(message.chat.id, f"❌ Bu animeda {num}-qism allaqachon bor!", reply_markup=admin_kb(message.from_user.id))
+    # ----------------------------------
+
+    # Sizning eski INSERT qatoringiz:
     cursor.execute("INSERT INTO episodes VALUES (?, ?, ?)", (code, int(num), message.video.file_id))
     conn.commit()
+    # Pastdagi Super admin xabarlari qolsin
     # Super adminga xabar
     bot.send_message(ADMIN_ID, f"🎬 <b>Yangi qism qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name} (ID: {message.from_user.id})\n<b>Anime kodi:</b> {code}\n<b>Qism:</b> {num}", parse_mode='HTML')
     bot.send_message(message.chat.id, f"✅ <b>{code}</b>-anime uchun <b>{num}</b>-qism muvaffaqiyatli saqlandi!", reply_markup=admin_kb(message.from_user.id))
