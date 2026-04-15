@@ -22,32 +22,30 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 # ==================== FOYDALANUVCHIGA XABAR YOZISH (/msg) ====================
 @bot.message_handler(commands=['msg'])
 def test_msg(message):
-  # 1. Admin ekanligini va foydalanuvchiga yozish ruxsati borligini tekshirish
+    # Admin ruxsatini tekshirish (Super Admin yoki ruxsati bor admin)
     perms = get_admin_perms(message.from_user.id)
-    if not perms or not perms['write_user']:
-        bot.reply_to(message, f"Sizda bu buyruqni ishlatish uchun ruxsat yo'q! ID: {message.from_user.id}")
+    if message.from_user.id != ADMIN_ID and (not perms or not perms.get('write_user')):
+        bot.reply_to(message, "⚠️ Sizda foydalanuvchilarga xabar yozish ruxsati yo'q.")
         return
 
     try:
-        # 2. Buyruqni qismlarga bo'lish
         parts = message.text.split(maxsplit=2)
-        
         if len(parts) < 3:
-            bot.reply_to(message, "⚠️ <b>Xato!</b>\nIshlatish: <code>/msg ID MATN</code>\n\nMisol: <code>/msg 7878240647 Salom do'stim</code>")
+            bot.reply_to(message, "💡 Foydalanish: <code>/msg [ID] [xabar]</code>", parse_mode='HTML')
+            return
+        
+        target_id = parts[1].strip()
+        msg_text = parts[2]
+        
+        # ID raqam ekanligini tekshirish
+        if not target_id.isdigit():
+            bot.reply_to(message, "⚠️ Xato: Foydalanuvchi ID raqami faqat raqamlardan iborat bo'lishi kerak.")
             return
 
-        target_id = parts[1].strip()
-        msg_text = parts[2].strip()
-
-        # 3. Xabarni yuborish
         bot.send_message(target_id, f"📩 <b>Adminstratsiyadan xabar:</b>\n\n{msg_text}", parse_mode='HTML')
-        
-        # 4. Senga tasdiq yuborish
-        bot.reply_to(message, f"✅ Xabar yuborildi!\n🆔 ID: {target_id}")
-
+        bot.reply_to(message, "✅ Xabar yuborildi!")
     except Exception as e:
-        # Agar biror xato bo'lsa, senga xabar beradi
-        bot.reply_to(message, f"❌ <b>Xatolik yuz berdi:</b>\n<code>{e}</code>")
+        bot.reply_to(message, "❌ Xato: Foydalanuvchi botni bloklagan bo'lishi mumkin.")
         
 
 # ==================== BAZA ====================
@@ -252,9 +250,36 @@ def guide(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔍 Anime izlash")
 def search_handler(message):
-    if not check_subscription(message):
-        return
-    bot.send_message(message.chat.id, "Anime kodini yuboring (Masalan: 101):")
+    if not check_subscription(message): return
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🔢 Kod orqali", callback_data="search_code"),
+        types.InlineKeyboardButton("📝 Nomi orqali", callback_data="search_name")
+    )
+    markup.add(types.InlineKeyboardButton("🎭 Janrlar", callback_data="search_genre"))
+    markup.add(
+        types.InlineKeyboardButton("🆕 Yangilar", callback_data="search_new"),
+        types.InlineKeyboardButton("🔥 Top", callback_data="search_top")
+    )
+    bot.send_message(message.chat.id, "👇 Qidiruv turini tanlang:", reply_markup=markup)
+
+# Nomi orqali qidirish natijasi
+def process_search_name(message):
+    search_text = message.text.strip()
+    conn, cursor = get_db()
+    cursor.execute("SELECT code, title FROM animes WHERE title LIKE ?", (f"%{search_text}%",))
+    results = cursor.fetchall()
+    conn.close()
+    
+    if results:
+        text = f"🔍 <b>\"{search_text}\"</b> nomi bo'yicha topilgan animelar:\n\n"
+        for r in results:
+            text += f"🎬 <b>{r[1]}</b> — Kod: <code>{r[0]}</code>\n"
+        text += "\n<i>Ko'rmoqchi bo'lgan anime kodini yuboring!</i>"
+        bot.send_message(message.chat.id, text, parse_mode='HTML')
+    else:
+        bot.send_message(message.chat.id, f"❌ <b>\"{search_text}\"</b> nomli anime topilmadi.")
 
 @bot.message_handler(func=lambda m: m.text == "🏠 Bosh menyu")
 def back_home(message):
