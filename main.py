@@ -674,22 +674,26 @@ def add_step_final(message, photo_id, code):
     title = message.text
     conn, cursor = get_db()
     
-    # --- DUBLIKAT TEKSHIRUVI ---
+    # Dublikat tekshiruvi
     cursor.execute("SELECT title FROM animes WHERE code = ?", (code,))
     exists = cursor.fetchone()
     if exists:
         conn.close()
-        return bot.send_message(message.chat.id, f"❌ Xato! <b>{code}</b> kodi bazada bor: \"{exists[0]}\"\nBoshqa kod bilan qaytadan urinib ko'ring.", reply_markup=admin_kb(message.from_user.id))
-    # ---------------------------
+        return bot.send_message(message.chat.id, f"❌ Xato! <b>{code}</b> kodi bazada bor: \"{exists[0]}\"\nBoshqa kod tanlang.", reply_markup=admin_kb(message.from_user.id))
 
-    # Endi REPLACE emas, faqat INSERT qilamiz (xavfsiz bo'lishi uchun)
+    # Bazaga saqlash
     cursor.execute("INSERT INTO animes (code, title, photo_id) VALUES (?, ?, ?)", (code, title, photo_id))
     conn.commit()
-    # Pastdagi admin xabar va h.k. qismlariga tegmang, ular qolsin
-    # Super adminga xabar
-    bot.send_message(ADMIN_ID, f"➕ <b>Yangi anime qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name} (ID: {message.from_user.id})\n<b>Nomi:</b> {title}\n<b>Kodi:</b> {code}", parse_mode='HTML')
+    conn.close()
+
+    # Super adminga xabar yuborish qismi (680-qatorlar atrofi)
+    msg_to_admin = f"➕ <b>Yangi anime qo'shildi!</b>\n\n<b>Yukladi:</b> {message.from_user.first_name}\n<b>Nomi:</b> {title}\n<b>Kodi:</b> {code}"
+    bot.send_message(ADMIN_ID, msg_to_admin, parse_mode='HTML')
+    
+    # Yuklagan adminga javob
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
-    bot.send_message(message.chat.id, f"✅ <b>Anime saqlandi!</b>\n\n🎬 Nomi: {title}\n📌 Kodi: {code}\n🔗 Havola: <code>{link}</code>", reply_markup=admin_kb(message.from_user.id))
+    res_text = f"✅ <b>Anime saqlandi!</b>\n\n🎬 Nomi: {title}\n📌 Kodi: {code}\n🔗 Havola: <code>{link}</code>"
+    bot.send_message(message.chat.id, res_text, reply_markup=admin_kb(message.from_user.id))
 
 # Qism qo'shish (ruxsat va super admin xabari)
 @bot.message_handler(func=lambda m: m.text == "🎬 Qism qo'shish")
