@@ -594,27 +594,24 @@ add_temp = {}   # admin qo'shish uchun
 @bot.message_handler(func=lambda m: m.text == "📊 Statistika")
 def show_stats(message):
     perms = get_admin_perms(message.from_user.id)
-    if not perms or not perms['view_stats']:
+    if message.from_user.id != ADMIN_ID and (not perms or not perms.get('view_stats')):
         return
+
     conn, cursor = get_db()
-    total_users = cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    total_animes = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
-    last_users = cursor.execute("SELECT user_id, username FROM users ORDER BY rowid DESC LIMIT 10").fetchall()
-    u_text = ""
-   for u in last_users:
-        user_link = f'<a href="tg://user?id={u[0]}">{u[0]}</a>'
-        # Faqat ID raqamini havola qilib chiqaramiz, username shart emas
-        u_text += f"👤 ID: {user_link}\n"
-    top_animes = cursor.execute("SELECT title, views FROM animes ORDER BY views DESC LIMIT 5").fetchall()
-    a_text = ""
-    for a in top_animes:
-        a_text += f"🎬 {a[0]} — {a[1]} marta\n"
-    text = f"📊 <b>Bot Statistikasi</b>\n\n" \
-           f"👥 Jami foydalanuvchilar: {total_users}\n" \
-           f"🎬 Jami animelar: {total_animes}\n\n" \
-           f"🔝 <b>Eng ko'p ko'rilganlar:</b>\n{a_text if a_text else 'Hali ko`rilmagan'}\n\n" \
-           f"🆕 <b>Oxirgi kirganlar (ID ustiga bosing):</b>\n{u_text}"
-    bot.send_message(message.chat.id, text, parse_mode='HTML')
+    user_count = cursor.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    anime_count = cursor.execute("SELECT COUNT(*) FROM animes").fetchone()[0]
+    ep_count = cursor.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+    conn.close()
+
+    # MANA SHU YERDA 604-QATOR XATOLIGI TUZATILDI:
+    stats_msg = (
+        f"📊 <b>Bot statistikasi:</b>\n\n"
+        f"👤 Foydalanuvchilar: {user_count}\n"
+        f"🎬 Animelar: {anime_count}\n"
+        f"🎞 Qismlar: {ep_count}"
+    )
+    
+    bot.send_message(message.chat.id, stats_msg, parse_mode='HTML')
 
 # Reklama yuborish
 @bot.message_handler(func=lambda m: m.text == "📢 Reklama yuborish")
