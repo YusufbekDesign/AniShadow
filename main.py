@@ -8,7 +8,7 @@ from threading import Thread
 
 # ==================== SOZLAMALAR ====================
 # Tokenni environment variable dan olish (Railway yoki boshqa hostda sozlangan)
-BOT_TOKEN = os.getenv('BOT_TOKEN', "8463516034:AAFCzKb7USbIDfG6Tm7LCHbK7NU8EoBQ8kM")  # agar env bo'lmasa, shu ishlaydi
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = 7878240647
 BOT_USERNAME = "Anishadowmythicbot"
 
